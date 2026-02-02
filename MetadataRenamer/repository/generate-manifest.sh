@@ -2,8 +2,8 @@
 # Bash script to generate manifest.json with checksum and timestamp
 # Usage: ./generate-manifest.sh [path-to-dll] [source-url]
 
-DLL_PATH="${1:-../Jellyfin.Plugin.Template/bin/Release/net9.0/Jellyfin.Plugin.Template.dll}"
-SOURCE_URL="${2:-https://raw.githubusercontent.com/loguefx/Jellyfin_MetaData_Renamer/main/MetadataRenamer/repository/Jellyfin.Plugin.Template.dll}"
+DLL_PATH="${1:-../Jellyfin.Plugin.Template/bin/Release/net9.0/Jellyfin.Plugin.MetadataRenamer.dll}"
+SOURCE_URL="${2:-https://raw.githubusercontent.com/loguefx/Jellyfin_MetaData_Renamer/main/MetadataRenamer/repository/Jellyfin.Plugin.MetadataRenamer.dll}"
 
 echo "Generating manifest.json..."
 
