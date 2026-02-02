@@ -1,4 +1,4 @@
-﻿{
+{
     "RepositoryName":  "MetadataRenamer Repository",
     "RepositoryDescription":  "Repository for the MetadataRenamer plugin - automatically renames series folders when metadata is identified",
     "Plugins":  [
