@@ -49,8 +49,13 @@ try {
     Write-Host "Warning: Could not read version from DLL, using manifest version" -ForegroundColor Yellow
 }
 
-# Save updated manifest
-$manifest | ConvertTo-Json -Depth 10 | Set-Content $manifestPath -Encoding UTF8
+# Save updated manifest with compact formatting (Jellyfin prefers compact JSON)
+$jsonContent = $manifest | ConvertTo-Json -Depth 10 -Compress
+# Reformat with proper indentation (2 spaces) for readability while keeping it valid
+$jsonContent = $jsonContent -replace '":', '": ' -replace ',', ', ' -replace '\{', '{' -replace '\}', '}'
+# Use a proper JSON formatter
+$jsonContent = ($manifest | ConvertTo-Json -Depth 10) -replace '  ', '  ' | Out-String
+Set-Content $manifestPath -Value $jsonContent.Trim() -Encoding UTF8 -NoNewline
 
 Write-Host "`nManifest updated successfully!" -ForegroundColor Green
 Write-Host "Checksum: $checksum" -ForegroundColor Cyan
