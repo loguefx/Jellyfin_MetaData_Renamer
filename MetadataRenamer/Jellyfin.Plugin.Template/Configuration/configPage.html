@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>MetadataRenamer</title>
+</head>
+<body>
+    <div id="MetadataRenamerConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-select,emby-checkbox">
+        <div data-role="content">
+            <div class="content-primary">
+                <form id="MetadataRenamerConfigForm">
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label">
+                            <input id="Enabled" name="Enabled" type="checkbox" is="emby-checkbox" />
+                            <span>Enable Plugin</span>
+                        </label>
+                        <div class="fieldDescription">Enable or disable the MetadataRenamer plugin</div>
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label">
+                            <input id="DryRun" name="DryRun" type="checkbox" is="emby-checkbox" />
+                            <span>Dry Run Mode</span>
+                        </label>
+                        <div class="fieldDescription">When enabled, the plugin will only log rename operations without actually renaming folders. Recommended for initial testing.</div>
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label">
+                            <input id="RenameSeriesFolders" name="RenameSeriesFolders" type="checkbox" is="emby-checkbox" />
+                            <span>Rename Series Folders</span>
+                        </label>
+                        <div class="fieldDescription">Enable automatic renaming of series folders</div>
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label">
+                            <input id="RequireProviderIdMatch" name="RequireProviderIdMatch" type="checkbox" is="emby-checkbox" />
+                            <span>Require Provider ID Match</span>
+                        </label>
+                        <div class="fieldDescription">Only rename series that have been matched with a metadata provider (Tvdb, Tmdb, etc.)</div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="SeriesFolderFormat">Series Folder Format</label>
+                        <input id="SeriesFolderFormat" name="SeriesFolderFormat" type="text" is="emby-input" />
+                        <div class="fieldDescription">Format template for series folder names. Supported placeholders: {Name}, {Year}, {Provider}, {Id}</div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="PreferredSeriesProviders">Preferred Series Providers</label>
+                        <input id="PreferredSeriesProviders" name="PreferredSeriesProviders" type="text" is="emby-input" />
+                        <div class="fieldDescription">Comma-separated list of preferred provider keys in order of preference (e.g., Tvdb, Tmdb, Imdb)</div>
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label">
+                            <input id="OnlyRenameWhenProviderIdsChange" name="OnlyRenameWhenProviderIdsChange" type="checkbox" is="emby-checkbox" />
+                            <span>Only Rename When Provider IDs Change</span>
+                        </label>
+                        <div class="fieldDescription">Only rename when provider IDs change (infers that Identify/refresh just happened)</div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="PerItemCooldownSeconds">Per-Item Cooldown (seconds)</label>
+                        <input id="PerItemCooldownSeconds" name="PerItemCooldownSeconds" type="number" is="emby-input" min="0" />
+                        <div class="fieldDescription">Minimum seconds between rename attempts for the same series</div>
+                    </div>
+                    <div>
+                        <button is="emby-button" type="submit" class="raised button-submit block emby-button">
+                            <span>Save</span>
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+        <script type="text/javascript">
+            var MetadataRenamerConfig = {
+                pluginUniqueId: 'eb5d7894-8eef-4b36-aa6f-5d124e828ce1'
+            };
+
+            document.querySelector('#MetadataRenamerConfigPage')
+                .addEventListener('pageshow', function() {
+                    Dashboard.showLoadingMsg();
+                    ApiClient.getPluginConfiguration(MetadataRenamerConfig.pluginUniqueId).then(function (config) {
+                        document.querySelector('#Enabled').checked = config.Enabled !== false;
+                        document.querySelector('#DryRun').checked = config.DryRun !== false;
+                        document.querySelector('#RenameSeriesFolders').checked = config.RenameSeriesFolders !== false;
+                        document.querySelector('#RequireProviderIdMatch').checked = config.RequireProviderIdMatch !== false;
+                        document.querySelector('#SeriesFolderFormat').value = config.SeriesFolderFormat || '{Name} ({Year}) [{Provider}-{Id}]';
+                        document.querySelector('#PreferredSeriesProviders').value = (config.PreferredSeriesProviders || []).join(', ');
+                        document.querySelector('#OnlyRenameWhenProviderIdsChange').checked = config.OnlyRenameWhenProviderIdsChange !== false;
+                        document.querySelector('#PerItemCooldownSeconds').value = config.PerItemCooldownSeconds || 60;
+                        Dashboard.hideLoadingMsg();
+                    });
+                });
+
+            document.querySelector('#MetadataRenamerConfigForm')
+                .addEventListener('submit', function(e) {
+                Dashboard.showLoadingMsg();
+                ApiClient.getPluginConfiguration(MetadataRenamerConfig.pluginUniqueId).then(function (config) {
+                    config.Enabled = document.querySelector('#Enabled').checked;
+                    config.DryRun = document.querySelector('#DryRun').checked;
+                    config.RenameSeriesFolders = document.querySelector('#RenameSeriesFolders').checked;
+                    config.RequireProviderIdMatch = document.querySelector('#RequireProviderIdMatch').checked;
+                    config.SeriesFolderFormat = document.querySelector('#SeriesFolderFormat').value;
+                    var providersText = document.querySelector('#PreferredSeriesProviders').value;
+                    config.PreferredSeriesProviders = providersText ? providersText.split(',').map(function(p) { return p.trim(); }).filter(function(p) { return p.length > 0; }) : [];
+                    config.OnlyRenameWhenProviderIdsChange = document.querySelector('#OnlyRenameWhenProviderIdsChange').checked;
+                    config.PerItemCooldownSeconds = parseInt(document.querySelector('#PerItemCooldownSeconds').value) || 60;
+                    ApiClient.updatePluginConfiguration(MetadataRenamerConfig.pluginUniqueId, config).then(function (result) {
+                        Dashboard.processPluginConfigurationUpdateResult(result);
+                    });
+                });
+
+                e.preventDefault();
+                return false;
+            });
+        </script>
+    </div>
+</body>
+</html>

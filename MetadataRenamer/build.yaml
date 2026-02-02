@@ -1,0 +1,23 @@
+---
+name: "MetadataRenamer"
+guid: "eb5d7894-8eef-4b36-aa6f-5d124e828ce1"
+version: "1.0.0.0"
+targetAbi: "10.9.0.0"
+framework: "net9.0"
+overview: "Automatically renames series folders to {SeriesName} ({Year}) [{provider}-{id}] format when metadata is identified"
+description: >
+  MetadataRenamer automatically renames series folders when you identify a series in Jellyfin.
+  It uses the format: {SeriesName} ({Year}) [{provider}-{id}], for example: 'The Flash (2014) [tvdb-279121]'.
+  The plugin only renames when provider IDs change (inferring that Identify/refresh just happened),
+  includes safety features like dry-run mode, collision checks, and per-item cooldown periods.
+category: "Libraries"
+owner: "YourName"
+artifacts:
+- "Jellyfin.Plugin.Template.dll"
+changelog: >
+  Initial release
+  - Automatic series folder renaming on metadata identification
+  - Format: {SeriesName} ({Year}) [{provider}-{id}]
+  - Dry-run mode for safe testing
+  - Provider ID change detection
+  - Collision checks and cooldown periods

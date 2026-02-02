@@ -1,0 +1,7 @@
+# Ignore generated DLLs (they should be in releases)
+*.dll
+*.pdb
+*.xml
+
+# Keep manifest.json (it's the repository definition)
+!manifest.json
