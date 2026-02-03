@@ -35,6 +35,24 @@ public class RenameCoordinator
     }
 
     /// <summary>
+    /// Clears all internal state to help with plugin unloading.
+    /// </summary>
+    public void ClearState()
+    {
+        try
+        {
+            _lastAttemptUtcByItem.Clear();
+            _providerHashByItem.Clear();
+            _lastGlobalActionUtc = DateTime.MinValue;
+            _logger?.LogInformation("[MR] RenameCoordinator state cleared");
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "[MR] Error clearing RenameCoordinator state: {Message}", ex.Message);
+        }
+    }
+
+    /// <summary>
     /// Handles item update events and triggers renaming if conditions are met.
     /// </summary>
     /// <param name="e">The item change event arguments.</param>

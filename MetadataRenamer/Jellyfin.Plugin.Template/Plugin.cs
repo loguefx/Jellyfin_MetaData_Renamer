@@ -282,7 +282,27 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
                         // #endregion
                     }
 
-                    _logger?.LogInformation("[MR] Step 3: Clearing static instance reference");
+                    _logger?.LogInformation("[MR] Step 3: Clearing service references and internal state");
+                    try
+                    {
+                        // Clear internal state from services to help with assembly unloading
+                        if (_renameCoordinator != null)
+                        {
+                            _renameCoordinator.ClearState();
+                            _logger?.LogInformation("[MR] ✓ RenameCoordinator state cleared");
+                        }
+                        
+                        if (_pathRenameService != null)
+                        {
+                            _logger?.LogInformation("[MR] PathRenameService instance exists - no state to clear");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger?.LogError(ex, "[MR] ERROR clearing service references: {Message}", ex.Message);
+                    }
+
+                    _logger?.LogInformation("[MR] Step 4: Clearing static instance reference");
                     try
                     {
                         // Clear static instance reference immediately
@@ -306,6 +326,22 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
                         // #region agent log
                         try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "A", location = "Plugin.cs:195", message = "ERROR clearing instance", data = new { error = ex.Message }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
                         // #endregion
+                    }
+
+                    _logger?.LogInformation("[MR] Step 5: Requesting garbage collection");
+                    try
+                    {
+                        // Request garbage collection to help release references
+                        // Note: This won't unload the assembly (that requires process restart),
+                        // but it helps release any remaining object references
+                        GC.Collect();
+                        GC.WaitForPendingFinalizers();
+                        GC.Collect();
+                        _logger?.LogInformation("[MR] ✓ Garbage collection requested");
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger?.LogWarning(ex, "[MR] Could not request garbage collection: {Message}", ex.Message);
                     }
 
                     // Log plugin folder path after cleanup
