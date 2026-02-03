@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net9.0</TargetFramework>
+    <TargetFramework>net8.0</TargetFramework>
     <RootNamespace>Jellyfin.Plugin.MetadataRenamer</RootNamespace>
     <AssemblyName>Jellyfin.Plugin.MetadataRenamer</AssemblyName>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
@@ -29,7 +29,9 @@
 
   <ItemGroup>
     <None Remove="Configuration\configPage.html" />
-    <EmbeddedResource Include="Configuration\configPage.html" />
+    <EmbeddedResource Include="Configuration\configPage.html">
+      <LogicalName>Jellyfin.Plugin.MetadataRenamer.Configuration.configPage.html</LogicalName>
+    </EmbeddedResource>
   </ItemGroup>
 
 </Project>
