@@ -12,6 +12,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Jellyfin 10.10.x support -->
     <PackageReference Include="Jellyfin.Controller" Version="10.10.7" >
       <ExcludeAssets>runtime</ExcludeAssets>
     </PackageReference>
