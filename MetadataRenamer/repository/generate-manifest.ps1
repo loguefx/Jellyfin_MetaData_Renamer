@@ -3,7 +3,7 @@
 # This script supports multiple Jellyfin versions by creating multiple version entries
 
 param(
-    [string]$DllPath = "..\Jellyfin.Plugin.Template\bin\Release\net9.0\Jellyfin.Plugin.MetadataRenamer.dll",
+    [string]$DllPath = "..\Jellyfin.Plugin.Template\bin\Release\net8.0\Jellyfin.Plugin.MetadataRenamer.dll",
     [string]$SourceUrl = "https://raw.githubusercontent.com/loguefx/Jellyfin_MetaData_Renamer/main/MetadataRenamer/repository/Jellyfin.Plugin.MetadataRenamer.zip",
     [string[]]$TargetAbis = @("10.10.0.0", "10.11.0.0")
 )
@@ -77,8 +77,19 @@ $manifest = @(
 )
 
 # Save manifest as properly formatted JSON (UTF-8 without BOM)
-$jsonContent = $manifest | ConvertTo-Json -Depth 10
+# Force array format - PowerShell's ConvertTo-Json may convert single-item arrays to objects
 $manifestPath = Join-Path $PSScriptRoot "manifest.json"
+
+# Convert to JSON - ensure it's always an array format
+$jsonContent = $manifest | ConvertTo-Json -Depth 10
+
+# PowerShell 5.1 may output object instead of array for single items - force array format
+if (-not $jsonContent.TrimStart().StartsWith('[')) {
+    # Wrap in array brackets and indent
+    $lines = $jsonContent -split "`n"
+    $indented = $lines | ForEach-Object { "  $_" }
+    $jsonContent = "[`n" + ($indented -join "`n") + "`n]"
+}
 
 # Use UTF8 encoding without BOM (Jellyfin requires this)
 $utf8NoBom = New-Object System.Text.UTF8Encoding $false
