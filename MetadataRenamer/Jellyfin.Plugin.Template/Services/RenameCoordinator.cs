@@ -415,8 +415,9 @@ public class RenameCoordinator
 
     /// <summary>
     /// Handles episode file renaming.
-    /// IMPORTANT: This method uses METADATA VALUES ONLY (season number, episode number, episode title from Jellyfin metadata).
-    /// It does NOT parse filenames to determine episode numbers. All values come from:
+    /// SAFETY: This method validates that the episode number in the filename matches the metadata episode number
+    /// before renaming. This prevents incorrect renames (e.g., renaming "episode 1" to "episode 5").
+    /// Renaming uses metadata values for:
     /// - episode.ParentIndexNumber (season number from metadata)
     /// - episode.IndexNumber (episode number from metadata)
     /// - episode.Name (episode title from metadata)
@@ -489,10 +490,10 @@ public class RenameCoordinator
                 }
             }
 
-            // Get current filename for comparison (but we don't use it for determining episode numbers)
+            // Get current filename for episode number validation
             var currentFileName = Path.GetFileNameWithoutExtension(path);
             
-            _logger.LogInformation("[MR] === Episode Metadata (from Jellyfin, NOT from filename) ===");
+            _logger.LogInformation("[MR] === Episode Metadata (from Jellyfin) ===");
             _logger.LogInformation("[MR] Series Name: {Series} (from metadata)", seriesName);
             _logger.LogInformation("[MR] Season Number: {Season} (from metadata: ParentIndexNumber)", 
                 seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
@@ -500,7 +501,7 @@ public class RenameCoordinator
                 episodeNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
             _logger.LogInformation("[MR] Episode Title: {Title} (from metadata: Name)", episodeTitle);
             _logger.LogInformation("[MR] Year: {Year} (from series metadata)", year?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
-            _logger.LogInformation("[MR] Current Filename: {Current} (for reference only, not used for renaming)", currentFileName);
+            _logger.LogInformation("[MR] Current Filename: {Current}", currentFileName);
             _logger.LogInformation("[MR] In Series Root (flat structure): {InSeriesRoot}", isInSeriesRoot);
 
             // Episode number is REQUIRED from metadata - we cannot rename without it
@@ -510,6 +511,42 @@ public class RenameCoordinator
                     seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
                     episodeNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
                 return;
+            }
+
+            // SAFETY CHECK: Parse episode number from filename and compare with metadata
+            // Only rename if the episode number in filename matches metadata episode number
+            var filenameEpisodeNumber = SafeName.ParseEpisodeNumberFromFileName(currentFileName);
+            
+            _logger.LogInformation("[MR] === Episode Number Validation ===");
+            _logger.LogInformation("[MR] Episode number from filename: {FilenameEp} (parsed from: {Filename})", 
+                filenameEpisodeNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NOT FOUND", 
+                currentFileName);
+            _logger.LogInformation("[MR] Episode number from metadata: {MetadataEp}", 
+                episodeNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+            if (filenameEpisodeNumber.HasValue)
+            {
+                if (filenameEpisodeNumber.Value != episodeNumber.Value)
+                {
+                    _logger.LogWarning("[MR] SKIP: Episode number mismatch! Filename says episode {FilenameEp}, but metadata says episode {MetadataEp}. " +
+                        "This prevents incorrect renames (e.g., renaming 'episode 1' to 'episode 5'). " +
+                        "Please verify the file is correctly identified in Jellyfin.",
+                        filenameEpisodeNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                        episodeNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                    return;
+                }
+                else
+                {
+                    _logger.LogInformation("[MR] ✓ Episode number match confirmed: Both filename and metadata indicate episode {Episode}",
+                        episodeNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                }
+            }
+            else
+            {
+                _logger.LogWarning("[MR] Warning: Could not parse episode number from filename '{Filename}'. " +
+                    "Proceeding with rename using metadata episode number {MetadataEp}, but please verify this is correct.",
+                    currentFileName,
+                    episodeNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
             }
 
             // Log if season number is missing (common for flat structures)
@@ -536,18 +573,15 @@ public class RenameCoordinator
                 year);
 
             _logger.LogInformation("[MR] === Episode File Rename Details ===");
-            _logger.LogInformation("[MR] Current File: {Current}{Extension} (will be renamed using metadata values)", currentFileName, fileExtension);
-            _logger.LogInformation("[MR] Desired File: {Desired}{Extension} (based on metadata: S{Season}E{Episode} - {Title})", 
-                desiredFileName, fileExtension,
-                seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "?",
-                episodeNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                episodeTitle);
+            _logger.LogInformation("[MR] Current File: {Current}{Extension}", currentFileName, fileExtension);
+            _logger.LogInformation("[MR] Desired File: {Desired}{Extension}", desiredFileName, fileExtension);
             _logger.LogInformation("[MR] Format Template: {Format}", cfg.EpisodeFileFormat);
-            _logger.LogInformation("[MR] Dry Run Mode: {DryRun}", cfg.DryRun);
+            _logger.LogInformation("[MR] ✓ Safety check passed: Filename episode number matches metadata episode number");
             _logger.LogInformation("[MR] ✓ Using metadata values: Season={Season}, Episode={Episode}, Title={Title}", 
                 seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "N/A",
                 episodeNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 string.IsNullOrWhiteSpace(episodeTitle) ? "(no title)" : episodeTitle);
+            _logger.LogInformation("[MR] Dry Run Mode: {DryRun}", cfg.DryRun);
 
             _pathRenamer.TryRenameEpisodeFile(episode, desiredFileName, fileExtension, cfg.DryRun);
 

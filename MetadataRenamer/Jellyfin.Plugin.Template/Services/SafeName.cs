@@ -186,6 +186,74 @@ public static class SafeName
         return string.IsNullOrWhiteSpace(cleaned) ? "Unknown" : cleaned;
     }
 
+    /// <summary>
+    /// Attempts to parse an episode number from a filename.
+    /// Supports common patterns: "EP 1", "episode 1", "E01", "S01E01", "01", etc.
+    /// </summary>
+    /// <param name="fileName">The filename (without extension) to parse.</param>
+    /// <returns>The episode number if found, null otherwise.</returns>
+    public static int? ParseEpisodeNumberFromFileName(string fileName)
+    {
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
+            return null;
+        }
+
+        // Try various patterns in order of specificity
+        // Pattern 1: S##E## or s##e## (e.g., "S01E01", "s1e5")
+        var match = Regex.Match(fileName, @"[Ss](\d+)[Ee](\d+)", RegexOptions.IgnoreCase);
+        if (match.Success && match.Groups.Count >= 3)
+        {
+            if (int.TryParse(match.Groups[2].Value, out var epNum))
+            {
+                return epNum;
+            }
+        }
+
+        // Pattern 2: E## or e## (e.g., "E01", "e5")
+        match = Regex.Match(fileName, @"[Ee](\d+)", RegexOptions.IgnoreCase);
+        if (match.Success && match.Groups.Count >= 2)
+        {
+            if (int.TryParse(match.Groups[1].Value, out var epNum))
+            {
+                return epNum;
+            }
+        }
+
+        // Pattern 3: EP ## or ep ## or EP## or ep## (e.g., "EP 1", "ep 5", "EP01", "ep5")
+        match = Regex.Match(fileName, @"[Ee][Pp]\s*(\d+)", RegexOptions.IgnoreCase);
+        if (match.Success && match.Groups.Count >= 2)
+        {
+            if (int.TryParse(match.Groups[1].Value, out var epNum))
+            {
+                return epNum;
+            }
+        }
+
+        // Pattern 4: Episode ## or episode ## or Episode## or episode## (e.g., "Episode 1", "episode 5")
+        match = Regex.Match(fileName, @"[Ee]pisode\s*(\d+)", RegexOptions.IgnoreCase);
+        if (match.Success && match.Groups.Count >= 2)
+        {
+            if (int.TryParse(match.Groups[1].Value, out var epNum))
+            {
+                return epNum;
+            }
+        }
+
+        // Pattern 5: Just a number at the end or in the middle (e.g., "Angel Beats - 1", "Show 01")
+        // Look for standalone numbers, prefer numbers at the end
+        match = Regex.Match(fileName, @"\b(\d{1,3})\b", RegexOptions.RightToLeft);
+        if (match.Success && match.Groups.Count >= 2)
+        {
+            if (int.TryParse(match.Groups[1].Value, out var epNum) && epNum > 0 && epNum <= 999)
+            {
+                return epNum;
+            }
+        }
+
+        return null;
+    }
+
     private static string CollapseSpaces(string s)
         => Regex.Replace(s ?? string.Empty, @"\s+", " ").Trim();
 }
