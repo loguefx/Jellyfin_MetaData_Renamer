@@ -4,7 +4,7 @@
 
 param(
     [string]$DllPath = "..\Jellyfin.Plugin.Template\bin\Release\net9.0\Jellyfin.Plugin.MetadataRenamer.dll",
-    [string]$SourceUrl = "https://raw.githubusercontent.com/loguefx/Jellyfin_MetaData_Renamer/main/MetadataRenamer/repository/Jellyfin.Plugin.MetadataRenamer.dll",
+    [string]$SourceUrl = "https://raw.githubusercontent.com/loguefx/Jellyfin_MetaData_Renamer/main/MetadataRenamer/repository/Jellyfin.Plugin.MetadataRenamer.zip",
     [string[]]$TargetAbis = @("10.10.0.0", "10.11.0.0")
 )
 
@@ -19,9 +19,18 @@ if (-not (Test-Path $DllPath)) {
     exit 1
 }
 
-# Calculate SHA256 checksum
-Write-Host "Calculating checksum..." -ForegroundColor Cyan
-$hash = Get-FileHash -Path $DllPath -Algorithm SHA256
+# Create ZIP package from DLL (Jellyfin requires ZIP, not raw DLL)
+Write-Host "Creating ZIP package..." -ForegroundColor Cyan
+$zipPath = Join-Path $PSScriptRoot "Jellyfin.Plugin.MetadataRenamer.zip"
+if (Test-Path $zipPath) {
+    Remove-Item $zipPath -Force
+}
+Compress-Archive -Path $DllPath -DestinationPath $zipPath -Force
+Write-Host "ZIP created: $zipPath" -ForegroundColor Green
+
+# Calculate SHA256 checksum of ZIP file
+Write-Host "Calculating ZIP checksum..." -ForegroundColor Cyan
+$hash = Get-FileHash -Path $zipPath -Algorithm SHA256
 $checksum = $hash.Hash.ToLower()
 Write-Host "Checksum: $checksum" -ForegroundColor Cyan
 
