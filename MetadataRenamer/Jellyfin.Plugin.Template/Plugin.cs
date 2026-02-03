@@ -246,9 +246,62 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
                     // Log plugin folder path before cleanup
                     try
                     {
-                        var pluginPath = System.IO.Path.Combine(ApplicationPaths?.PluginsPath ?? "UNKNOWN", Name);
-                        _logger?.LogInformation("[MR] Plugin Folder Path: {Path}", pluginPath);
-                        _logger?.LogInformation("[MR] Plugin Folder Exists Before Cleanup: {Exists}", System.IO.Directory.Exists(pluginPath));
+                        var pluginsPath = ApplicationPaths?.PluginsPath ?? "UNKNOWN";
+                        var pluginPath = System.IO.Path.Combine(pluginsPath, Name);
+                        
+                        // Get version from assembly
+                        var version = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "1.0.0.0";
+                        var versionedPluginPath = System.IO.Path.Combine(pluginsPath, $"{Name}_{version}");
+                        
+                        _logger?.LogInformation("[MR] Plugins Base Path: {Path}", pluginsPath);
+                        _logger?.LogInformation("[MR] Plugin Folder Path (non-versioned): {Path}", pluginPath);
+                        _logger?.LogInformation("[MR] Plugin Folder Path (versioned): {Path}", versionedPluginPath);
+                        _logger?.LogInformation("[MR] Plugin Version: {Version}", version);
+                        _logger?.LogInformation("[MR] Non-versioned Folder Exists: {Exists}", System.IO.Directory.Exists(pluginPath));
+                        _logger?.LogInformation("[MR] Versioned Folder Exists: {Exists}", System.IO.Directory.Exists(versionedPluginPath));
+                        
+                        // Check DLL file specifically
+                        if (System.IO.Directory.Exists(versionedPluginPath))
+                        {
+                            var dllPath = System.IO.Path.Combine(versionedPluginPath, "Jellyfin.Plugin.MetadataRenamer.dll");
+                            if (System.IO.File.Exists(dllPath))
+                            {
+                                var dllInfo = new System.IO.FileInfo(dllPath);
+                                _logger?.LogInformation("[MR] DLL File Path: {Path}", dllPath);
+                                _logger?.LogInformation("[MR] DLL File Exists: {Exists}", dllInfo.Exists);
+                                _logger?.LogInformation("[MR] DLL File Size: {Size} bytes", dllInfo.Length);
+                                _logger?.LogInformation("[MR] DLL Last Modified: {Modified}", dllInfo.LastWriteTime);
+                                _logger?.LogInformation("[MR] DLL Attributes: {Attributes}", dllInfo.Attributes);
+                                
+                                // Try to check if file is locked
+                                try
+                                {
+                                    using (var fs = System.IO.File.Open(dllPath, System.IO.FileMode.Open, System.IO.FileAccess.Read, System.IO.FileShare.ReadWrite))
+                                    {
+                                        _logger?.LogInformation("[MR] DLL File can be opened (not locked by us)");
+                                    }
+                                }
+                                catch (Exception fileEx)
+                                {
+                                    _logger?.LogWarning(fileEx, "[MR] DLL File appears to be locked: {Message}", fileEx.Message);
+                                }
+                            }
+                            else
+                            {
+                                _logger?.LogWarning("[MR] DLL file not found at expected path: {Path}", dllPath);
+                            }
+                            
+                            // List all files in the plugin folder
+                            try
+                            {
+                                var files = System.IO.Directory.GetFiles(versionedPluginPath);
+                                _logger?.LogInformation("[MR] Files in plugin folder ({Count}): {Files}", files.Length, string.Join(", ", files.Select(f => System.IO.Path.GetFileName(f))));
+                            }
+                            catch (Exception listEx)
+                            {
+                                _logger?.LogWarning(listEx, "[MR] Could not list files in plugin folder");
+                            }
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -328,16 +381,52 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
                         // #endregion
                     }
 
-                    _logger?.LogInformation("[MR] Step 5: Requesting garbage collection");
+                    _logger?.LogInformation("[MR] Step 5: Logging assembly and thread information");
+                    try
+                    {
+                        // Log assembly information
+                        var currentAssembly = System.Reflection.Assembly.GetExecutingAssembly();
+                        _logger?.LogInformation("[MR] Current Assembly: {Assembly}", currentAssembly.FullName);
+                        _logger?.LogInformation("[MR] Assembly Location: {Location}", currentAssembly.Location);
+                        _logger?.LogInformation("[MR] Assembly CodeBase: {CodeBase}", currentAssembly.CodeBase);
+                        
+                        // Log thread information
+                        var threadCount = System.Diagnostics.Process.GetCurrentProcess().Threads.Count;
+                        _logger?.LogInformation("[MR] Process Thread Count: {Count}", threadCount);
+                        
+                        // Log object references
+                        _logger?.LogInformation("[MR] LibraryManager Reference: {IsNull}", _libraryManager == null ? "NULL" : "EXISTS");
+                        _logger?.LogInformation("[MR] RenameCoordinator Reference: {IsNull}", _renameCoordinator == null ? "NULL" : "EXISTS");
+                        _logger?.LogInformation("[MR] PathRenameService Reference: {IsNull}", _pathRenameService == null ? "NULL" : "EXISTS");
+                        _logger?.LogInformation("[MR] Logger Reference: {IsNull}", _logger == null ? "NULL" : "EXISTS");
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger?.LogWarning(ex, "[MR] Could not log assembly/thread information: {Message}", ex.Message);
+                    }
+
+                    _logger?.LogInformation("[MR] Step 6: Requesting garbage collection");
                     try
                     {
                         // Request garbage collection to help release references
                         // Note: This won't unload the assembly (that requires process restart),
                         // but it helps release any remaining object references
+                        var gen0Before = GC.CollectionCount(0);
+                        var gen1Before = GC.CollectionCount(1);
+                        var gen2Before = GC.CollectionCount(2);
+                        
                         GC.Collect();
                         GC.WaitForPendingFinalizers();
                         GC.Collect();
+                        
+                        var gen0After = GC.CollectionCount(0);
+                        var gen1After = GC.CollectionCount(1);
+                        var gen2After = GC.CollectionCount(2);
+                        
                         _logger?.LogInformation("[MR] ✓ Garbage collection requested");
+                        _logger?.LogInformation("[MR] GC Gen0: {Before} -> {After}", gen0Before, gen0After);
+                        _logger?.LogInformation("[MR] GC Gen1: {Before} -> {After}", gen1Before, gen1After);
+                        _logger?.LogInformation("[MR] GC Gen2: {Before} -> {After}", gen2Before, gen2After);
                     }
                     catch (Exception ex)
                     {
@@ -347,17 +436,54 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
                     // Log plugin folder path after cleanup
                     try
                     {
-                        var pluginPath = System.IO.Path.Combine(ApplicationPaths?.PluginsPath ?? "UNKNOWN", Name);
-                        _logger?.LogInformation("[MR] Plugin Folder Exists After Cleanup: {Exists}", System.IO.Directory.Exists(pluginPath));
-                        if (System.IO.Directory.Exists(pluginPath))
+                        var pluginsPath = ApplicationPaths?.PluginsPath ?? "UNKNOWN";
+                        var pluginPath = System.IO.Path.Combine(pluginsPath, Name);
+                        var version = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "1.0.0.0";
+                        var versionedPluginPath = System.IO.Path.Combine(pluginsPath, $"{Name}_{version}");
+                        
+                        _logger?.LogInformation("[MR] === Post-Cleanup Folder Check ===");
+                        _logger?.LogInformation("[MR] Non-versioned Folder Exists: {Exists}", System.IO.Directory.Exists(pluginPath));
+                        _logger?.LogInformation("[MR] Versioned Folder Exists: {Exists}", System.IO.Directory.Exists(versionedPluginPath));
+                        
+                        if (System.IO.Directory.Exists(versionedPluginPath))
                         {
-                            _logger?.LogWarning("[MR] ⚠️ WARNING: Plugin folder still exists after Dispose()!");
-                            _logger?.LogWarning("[MR] This indicates Jellyfin may not delete the folder automatically");
-                            _logger?.LogWarning("[MR] Folder Path: {Path}", pluginPath);
+                            _logger?.LogWarning("[MR] ⚠️ WARNING: Versioned plugin folder still exists after Dispose()!");
+                            _logger?.LogWarning("[MR] Folder Path: {Path}", versionedPluginPath);
+                            
+                            // Check DLL file status
+                            var dllPath = System.IO.Path.Combine(versionedPluginPath, "Jellyfin.Plugin.MetadataRenamer.dll");
+                            if (System.IO.File.Exists(dllPath))
+                            {
+                                _logger?.LogWarning("[MR] DLL file still exists: {Path}", dllPath);
+                                try
+                                {
+                                    var dllInfo = new System.IO.FileInfo(dllPath);
+                                    _logger?.LogWarning("[MR] DLL File Size: {Size} bytes, Last Modified: {Modified}", dllInfo.Length, dllInfo.LastWriteTime);
+                                    
+                                    // Try to check file lock
+                                    try
+                                    {
+                                        using (var fs = System.IO.File.Open(dllPath, System.IO.FileMode.Open, System.IO.FileAccess.Read, System.IO.FileShare.ReadWrite))
+                                        {
+                                            _logger?.LogInformation("[MR] DLL file can be opened (may still be locked by Jellyfin process)");
+                                        }
+                                    }
+                                    catch (System.IO.IOException ioEx)
+                                    {
+                                        _logger?.LogError(ioEx, "[MR] DLL file is LOCKED and cannot be deleted: {Message}", ioEx.Message);
+                                    }
+                                }
+                                catch (Exception fileEx)
+                                {
+                                    _logger?.LogWarning(fileEx, "[MR] Could not check DLL file status");
+                                }
+                            }
+                            
+                            _logger?.LogWarning("[MR] This is expected - Jellyfin will delete on next startup (deleteOnStartup mechanism)");
                         }
                         else
                         {
-                            _logger?.LogInformation("[MR] ✓ Plugin folder does not exist (expected if Jellyfin deleted it)");
+                            _logger?.LogInformation("[MR] ✓ Versioned plugin folder does not exist (Jellyfin may have deleted it)");
                         }
                     }
                     catch (Exception ex)
