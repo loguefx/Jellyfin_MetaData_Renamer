@@ -28,11 +28,11 @@ if (Test-Path $zipPath) {
 Compress-Archive -Path $DllPath -DestinationPath $zipPath -Force
 Write-Host "ZIP created: $zipPath" -ForegroundColor Green
 
-# Calculate SHA256 checksum of ZIP file
-Write-Host "Calculating ZIP checksum..." -ForegroundColor Cyan
-$hash = Get-FileHash -Path $zipPath -Algorithm SHA256
-$checksum = $hash.Hash.ToLower()
-Write-Host "Checksum: $checksum" -ForegroundColor Cyan
+# Calculate MD5 checksum of ZIP file (Jellyfin uses MD5, not SHA256)
+Write-Host "Calculating ZIP checksum (MD5)..." -ForegroundColor Cyan
+$hash = Get-FileHash -Path $zipPath -Algorithm MD5
+$checksum = $hash.Hash.ToUpper()  # Jellyfin expects uppercase MD5
+Write-Host "Checksum (MD5): $checksum" -ForegroundColor Cyan
 
 # Get current timestamp
 $timestamp = Get-Date -Format "yyyy-MM-ddTHH:mm:ss.fffZ"
