@@ -40,13 +40,18 @@ public class RenameCoordinator
     /// <param name="cfg">The plugin configuration.</param>
     public void HandleItemUpdated(ItemChangeEventArgs e, PluginConfiguration cfg)
     {
+        // Log all item updates to debug
+        _logger.LogDebug("[MR] ItemUpdated event: Type={Type} Name={Name} Id={Id}", e.Item?.GetType().Name ?? "null", e.Item?.Name ?? "null", e.Item?.Id ?? Guid.Empty);
+
         if (!cfg.Enabled)
         {
+            _logger.LogDebug("[MR] Plugin disabled, skipping");
             return;
         }
 
         if (!cfg.RenameSeriesFolders)
         {
+            _logger.LogDebug("[MR] RenameSeriesFolders disabled, skipping");
             return;
         }
 
@@ -54,6 +59,7 @@ public class RenameCoordinator
         var now = DateTime.UtcNow;
         if (now - _lastGlobalActionUtc < _globalMinInterval)
         {
+            _logger.LogDebug("[MR] Global debounce active, skipping");
             return;
         }
 
@@ -61,8 +67,11 @@ public class RenameCoordinator
 
         if (e.Item is not Series series)
         {
+            _logger.LogDebug("[MR] Item is not a Series (Type={Type}), skipping", e.Item?.GetType().Name ?? "null");
             return;
         }
+
+        _logger.LogDebug("[MR] Processing Series: Name={Name} Id={Id} Path={Path}", series.Name, series.Id, series.Path);
 
         // Per-item cooldown
         if (_lastAttemptUtcByItem.TryGetValue(series.Id, out var lastTry))
@@ -102,9 +111,11 @@ public class RenameCoordinator
         var name = series.Name?.Trim();
         var year = series.ProductionYear;
 
+        _logger.LogDebug("[MR] Series details: Name={Name} Year={Year} ProviderIds={ProviderIds}", name, year, series.ProviderIds != null ? string.Join(", ", series.ProviderIds.Select(kv => $"{kv.Key}={kv.Value}")) : "null");
+
         if (string.IsNullOrWhiteSpace(name) || year is null)
         {
-            _logger.LogDebug("[MR] Skip: missing name/year. Name={Name} Year={Year}", name, year);
+            _logger.LogInformation("[MR] Skip: missing name/year. Name={Name} Year={Year}", name, year);
             return;
         }
 
@@ -114,12 +125,15 @@ public class RenameCoordinator
             var newHash = ProviderIdHelper.ComputeProviderHash(series.ProviderIds);
             _providerHashByItem.TryGetValue(series.Id, out var oldHash);
 
+            _logger.LogInformation("[MR] Provider hash check: Old={OldHash} New={NewHash} Name={Name}", oldHash ?? "(none)", newHash, name);
+
             if (string.Equals(newHash, oldHash, StringComparison.Ordinal))
             {
-                _logger.LogDebug("[MR] Skip: ProviderIds unchanged. Name={Name}", name);
+                _logger.LogInformation("[MR] Skip: ProviderIds unchanged. Name={Name} Hash={Hash}", name, newHash);
                 return;
             }
 
+            _logger.LogInformation("[MR] ProviderIds changed! Old={OldHash} New={NewHash}", oldHash ?? "(none)", newHash);
             _providerHashByItem[series.Id] = newHash;
         }
 
