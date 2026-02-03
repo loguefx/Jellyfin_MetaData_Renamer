@@ -446,9 +446,23 @@ public class RenameCoordinator
 
             _logger.LogInformation("[MR] Episode file path verified: {Path}", path);
 
+            // Check if episode is directly in series folder (no season folder)
+            var episodeDirectory = Path.GetDirectoryName(path);
+            var seriesPath = episode.Series?.Path;
+            var isInSeriesRoot = !string.IsNullOrWhiteSpace(seriesPath) && 
+                                 !string.IsNullOrWhiteSpace(episodeDirectory) &&
+                                 string.Equals(episodeDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), 
+                                             seriesPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), 
+                                             StringComparison.OrdinalIgnoreCase);
+            
+            if (isInSeriesRoot)
+            {
+                _logger.LogInformation("[MR] Episode is directly in series folder (no season folder structure)");
+            }
+
             // Get episode metadata
             var episodeTitle = episode.Name?.Trim() ?? string.Empty;
-            var seasonNumber = episode.ParentIndexNumber; // Season number
+            var seasonNumber = episode.ParentIndexNumber; // Season number (may be null for flat structures)
             var episodeNumber = episode.IndexNumber; // Episode number
             var seriesName = episode.SeriesName?.Trim() ?? string.Empty;
             
@@ -463,10 +477,11 @@ public class RenameCoordinator
                 }
             }
 
-            _logger.LogInformation("[MR] Episode metadata: Series={Series}, Season={Season}, Episode={Episode}, Title={Title}, Year={Year}",
+            _logger.LogInformation("[MR] Episode metadata: Series={Series}, Season={Season}, Episode={Episode}, Title={Title}, Year={Year}, InSeriesRoot={InSeriesRoot}",
                 seriesName, seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
                 episodeNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
-                episodeTitle, year?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+                episodeTitle, year?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                isInSeriesRoot);
 
             if (string.IsNullOrWhiteSpace(episodeTitle))
             {
@@ -474,12 +489,19 @@ public class RenameCoordinator
                 return;
             }
 
-            if (!seasonNumber.HasValue || !episodeNumber.HasValue)
+            // Episode number is required, but season number is optional (for flat structures)
+            if (!episodeNumber.HasValue)
             {
-                _logger.LogWarning("[MR] SKIP: Episode missing season or episode number. Season={Season}, Episode={Episode}", 
+                _logger.LogWarning("[MR] SKIP: Episode missing episode number. Season={Season}, Episode={Episode}", 
                     seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
                     episodeNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
                 return;
+            }
+
+            // Log if season number is missing (common for flat structures)
+            if (!seasonNumber.HasValue)
+            {
+                _logger.LogInformation("[MR] Note: Episode has no season number (flat structure). Season placeholders in format will be removed.");
             }
 
             // Build desired file name (without extension)
