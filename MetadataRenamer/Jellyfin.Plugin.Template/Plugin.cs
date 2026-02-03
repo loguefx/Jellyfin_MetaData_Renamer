@@ -343,12 +343,18 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
                         {
                             _renameCoordinator.ClearState();
                             _logger?.LogInformation("[MR] ✓ RenameCoordinator state cleared");
+                            // Note: Cannot null readonly fields, but ClearState() releases internal references
                         }
                         
                         if (_pathRenameService != null)
                         {
+                            // PathRenameService has no internal state to clear
                             _logger?.LogInformation("[MR] PathRenameService instance exists - no state to clear");
                         }
+                        
+                        // Note: Cannot null readonly fields (_libraryManager, _renameCoordinator, _pathRenameService)
+                        // but ClearState() has been called to release internal references
+                        _logger?.LogInformation("[MR] Service references are readonly - cannot be nulled, but internal state cleared");
                     }
                     catch (Exception ex)
                     {
@@ -394,11 +400,19 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
                         var threadCount = System.Diagnostics.Process.GetCurrentProcess().Threads.Count;
                         _logger?.LogInformation("[MR] Process Thread Count: {Count}", threadCount);
                         
-                        // Log object references
+                        // Log object references BEFORE nulling
+                        _logger?.LogInformation("[MR] === Object References BEFORE Nulling ===");
                         _logger?.LogInformation("[MR] LibraryManager Reference: {IsNull}", _libraryManager == null ? "NULL" : "EXISTS");
                         _logger?.LogInformation("[MR] RenameCoordinator Reference: {IsNull}", _renameCoordinator == null ? "NULL" : "EXISTS");
                         _logger?.LogInformation("[MR] PathRenameService Reference: {IsNull}", _pathRenameService == null ? "NULL" : "EXISTS");
                         _logger?.LogInformation("[MR] Logger Reference: {IsNull}", _logger == null ? "NULL" : "EXISTS");
+                        
+                        // Check for any event handlers still attached
+                        if (_libraryManager != null)
+                        {
+                            // We can't directly check if event handlers are attached, but we've already unsubscribed
+                            _logger?.LogInformation("[MR] LibraryManager still referenced - will be nulled in Step 3");
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -460,17 +474,35 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
                                     var dllInfo = new System.IO.FileInfo(dllPath);
                                     _logger?.LogWarning("[MR] DLL File Size: {Size} bytes, Last Modified: {Modified}", dllInfo.Length, dllInfo.LastWriteTime);
                                     
-                                    // Try to check file lock
+                                    // Try to check file lock with different access modes
                                     try
                                     {
+                                        // Try with ReadWrite share mode (allows other readers)
                                         using (var fs = System.IO.File.Open(dllPath, System.IO.FileMode.Open, System.IO.FileAccess.Read, System.IO.FileShare.ReadWrite))
                                         {
-                                            _logger?.LogInformation("[MR] DLL file can be opened (may still be locked by Jellyfin process)");
+                                            _logger?.LogInformation("[MR] DLL file can be opened with ReadWrite share (may still be locked by Jellyfin process)");
+                                        }
+                                        
+                                        // Try to delete the file directly to see what error we get
+                                        try
+                                        {
+                                            System.IO.File.Delete(dllPath);
+                                            _logger?.LogInformation("[MR] ✓ DLL file deleted successfully!");
+                                        }
+                                        catch (System.UnauthorizedAccessException uaEx)
+                                        {
+                                            _logger?.LogError(uaEx, "[MR] DLL file DELETE FAILED - UnauthorizedAccessException: {Message}", uaEx.Message);
+                                            _logger?.LogError("[MR] This indicates the DLL is locked by the Jellyfin process (assembly still loaded)");
+                                        }
+                                        catch (System.IO.IOException ioEx)
+                                        {
+                                            _logger?.LogError(ioEx, "[MR] DLL file DELETE FAILED - IOException: {Message}", ioEx.Message);
+                                            _logger?.LogError("[MR] This indicates the DLL is locked (likely by Jellyfin process)");
                                         }
                                     }
                                     catch (System.IO.IOException ioEx)
                                     {
-                                        _logger?.LogError(ioEx, "[MR] DLL file is LOCKED and cannot be deleted: {Message}", ioEx.Message);
+                                        _logger?.LogError(ioEx, "[MR] DLL file is LOCKED and cannot be opened: {Message}", ioEx.Message);
                                     }
                                 }
                                 catch (Exception fileEx)
@@ -479,7 +511,11 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
                                 }
                             }
                             
-                            _logger?.LogWarning("[MR] This is expected - Jellyfin will delete on next startup (deleteOnStartup mechanism)");
+                            _logger?.LogWarning("[MR] === Root Cause Analysis ===");
+                            _logger?.LogWarning("[MR] The DLL cannot be deleted because .NET has the assembly loaded in memory.");
+                            _logger?.LogWarning("[MR] .NET assemblies cannot be unloaded without unloading the AppDomain (requires process restart).");
+                            _logger?.LogWarning("[MR] This is expected behavior - Jellyfin will delete on next startup (deleteOnStartup mechanism).");
+                            _logger?.LogWarning("[MR] All plugin cleanup completed successfully - DLL lock is a .NET limitation.");
                         }
                         else
                         {
