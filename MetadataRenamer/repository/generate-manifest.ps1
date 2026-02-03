@@ -34,8 +34,8 @@ $hash = Get-FileHash -Path $zipPath -Algorithm MD5
 $checksum = $hash.Hash.ToUpper()  # Jellyfin expects uppercase MD5
 Write-Host "Checksum (MD5): $checksum" -ForegroundColor Cyan
 
-# Get current timestamp
-$timestamp = Get-Date -Format "yyyy-MM-ddTHH:mm:ss.fffZ"
+# Get current timestamp in UTC (properly formatted with Z suffix)
+$timestamp = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
 
 # Get version from DLL if possible
 $version = "1.0.0.0"
