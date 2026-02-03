@@ -1,28 +1,26 @@
-[
-  {
-    "guid": "eb5d7894-8eef-4b36-aa6f-5d124e828ce1",
-    "name": "MetadataRenamer",
-    "description": "MetadataRenamer automatically renames series folders when you identify a series in Jellyfin. It uses the format: {SeriesName} ({Year}) [{provider}-{id}], for example: 'The Flash (2014) [tvdb-279121]'. The plugin only renames when provider IDs change (inferring that Identify/refresh just happened), includes safety features like dry-run mode, collision checks, and per-item cooldown periods.",
-    "overview": "Automatically renames series folders to {SeriesName} ({Year}) [{provider}-{id}] format when metadata is identified",
-    "owner": "loguefx",
-    "category": "General",
-    "versions": [
-      {
-        "version": "1.0.0.0",
-        "targetAbi": "10.10.0.0",
-        "sourceUrl": "https://raw.githubusercontent.com/loguefx/Jellyfin_MetaData_Renamer/main/MetadataRenamer/repository/Jellyfin.Plugin.MetadataRenamer.zip",
-        "checksum": "C3B05083DE66C0DC2B4408AF325A6F4F",
-        "timestamp": "2026-02-02T16:55:17.249Z",
-        "changelog": "Automatic series folder renaming on metadata identification"
-      },
-      {
-        "version": "1.0.0.0",
-        "targetAbi": "10.11.0.0",
-        "sourceUrl": "https://raw.githubusercontent.com/loguefx/Jellyfin_MetaData_Renamer/main/MetadataRenamer/repository/Jellyfin.Plugin.MetadataRenamer.zip",
-        "checksum": "C3B05083DE66C0DC2B4408AF325A6F4F",
-        "timestamp": "2026-02-02T16:55:17.249Z",
-        "changelog": "Automatic series folder renaming on metadata identification"
-      }
-    ]
-  }
-]
+{
+    "name":  "MetadataRenamer",
+    "owner":  "loguefx",
+    "description":  "MetadataRenamer automatically renames series folders when you identify a series in Jellyfin. It uses the format: {SeriesName} ({Year}) [{provider}-{id}], for example: \u0027The Flash (2014) [tvdb-279121]\u0027. The plugin only renames when provider IDs change (inferring that Identify/refresh just happened), includes safety features like dry-run mode, collision checks, and per-item cooldown periods.",
+    "versions":  [
+                     {
+                         "changelog":  "Automatic series folder renaming on metadata identification",
+                         "version":  "1.0.0.0",
+                         "checksum":  "C1AEDC9C6A9D6B16264C70287C3E32B1",
+                         "timestamp":  "2026-02-02T17:09:36.953Z",
+                         "targetAbi":  "10.10.0.0",
+                         "sourceUrl":  "https://raw.githubusercontent.com/loguefx/Jellyfin_MetaData_Renamer/main/MetadataRenamer/repository/Jellyfin.Plugin.MetadataRenamer.zip"
+                     },
+                     {
+                         "changelog":  "Automatic series folder renaming on metadata identification",
+                         "version":  "1.0.0.0",
+                         "checksum":  "C1AEDC9C6A9D6B16264C70287C3E32B1",
+                         "timestamp":  "2026-02-02T17:09:36.953Z",
+                         "targetAbi":  "10.11.0.0",
+                         "sourceUrl":  "https://raw.githubusercontent.com/loguefx/Jellyfin_MetaData_Renamer/main/MetadataRenamer/repository/Jellyfin.Plugin.MetadataRenamer.zip"
+                     }
+                 ],
+    "category":  "General",
+    "overview":  "Automatically renames series folders to {SeriesName} ({Year}) [{provider}-{id}] format when metadata is identified",
+    "guid":  "eb5d7894-8eef-4b36-aa6f-5d124e828ce1"
+}
