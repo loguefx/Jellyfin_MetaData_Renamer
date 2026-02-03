@@ -65,22 +65,78 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
             _logger.LogInformation("[MR] Plugin initialized successfully");
             _logger.LogInformation("[MR] Event handler subscribed to ItemUpdated");
             
-            // Log plugin folder path
+            // Log plugin folder path and check for deleteOnStartup marker
             try
             {
-                var pluginPath = System.IO.Path.Combine(applicationPaths?.PluginsPath ?? "UNKNOWN", Name);
-                _logger.LogInformation("[MR] Expected Plugin Folder Path: {Path}", pluginPath);
-                _logger.LogInformation("[MR] Plugin Folder Exists: {Exists}", System.IO.Directory.Exists(pluginPath));
+                var pluginsPath = applicationPaths?.PluginsPath ?? "UNKNOWN";
+                var pluginPath = System.IO.Path.Combine(pluginsPath, Name);
+                var version = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "1.0.0.0";
+                var versionedPluginPath = System.IO.Path.Combine(pluginsPath, $"{Name}_{version}");
                 
-                if (System.IO.Directory.Exists(pluginPath))
+                _logger.LogInformation("[MR] === Plugin Constructor - Startup Check ===");
+                _logger.LogInformation("[MR] Plugins Base Path: {Path}", pluginsPath);
+                _logger.LogInformation("[MR] Non-versioned Folder Path: {Path}", pluginPath);
+                _logger.LogInformation("[MR] Versioned Folder Path: {Path}", versionedPluginPath);
+                _logger.LogInformation("[MR] Plugin Version: {Version}", version);
+                _logger.LogInformation("[MR] Non-versioned Folder Exists: {Exists}", System.IO.Directory.Exists(pluginPath));
+                _logger.LogInformation("[MR] Versioned Folder Exists: {Exists}", System.IO.Directory.Exists(versionedPluginPath));
+                
+                // #region agent log
+                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "startup", hypothesisId = "H1", location = "Plugin.cs:71", message = "Plugin constructor called - checking folder existence", data = new { pluginsPath = pluginsPath, versionedFolderPath = versionedPluginPath, versionedFolderExists = System.IO.Directory.Exists(versionedPluginPath), nonVersionedFolderExists = System.IO.Directory.Exists(pluginPath) }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+                // #endregion
+                
+                if (System.IO.Directory.Exists(versionedPluginPath))
                 {
-                    var files = System.IO.Directory.GetFiles(pluginPath);
-                    _logger.LogInformation("[MR] Plugin Folder Files: {Files}", string.Join(", ", files.Select(f => System.IO.Path.GetFileName(f))));
+                    var files = System.IO.Directory.GetFiles(versionedPluginPath);
+                    _logger.LogInformation("[MR] Versioned Folder Files ({Count}): {Files}", files.Length, string.Join(", ", files.Select(f => System.IO.Path.GetFileName(f))));
+                    
+                    // Check if DLL exists and can be accessed
+                    var dllPath = System.IO.Path.Combine(versionedPluginPath, "Jellyfin.Plugin.MetadataRenamer.dll");
+                    if (System.IO.File.Exists(dllPath))
+                    {
+                        var dllInfo = new System.IO.FileInfo(dllPath);
+                        _logger.LogInformation("[MR] DLL File: {Path}, Size: {Size} bytes, Last Modified: {Modified}", dllPath, dllInfo.Length, dllInfo.LastWriteTime);
+                        
+                        // #region agent log
+                        try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "startup", hypothesisId = "H2", location = "Plugin.cs:85", message = "DLL file exists and plugin is being loaded", data = new { dllPath = dllPath, dllSize = dllInfo.Length, lastModified = dllInfo.LastWriteTime.ToString() }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+                        // #endregion
+                        
+                        // Try to check if file is locked
+                        try
+                        {
+                            using (var fs = System.IO.File.Open(dllPath, System.IO.FileMode.Open, System.IO.FileAccess.Read, System.IO.FileShare.ReadWrite))
+                            {
+                                _logger.LogInformation("[MR] DLL file can be opened (not locked at constructor time)");
+                            }
+                        }
+                        catch (Exception fileEx)
+                        {
+                            _logger.LogWarning(fileEx, "[MR] DLL file appears to be locked: {Message}", fileEx.Message);
+                            // #region agent log
+                            try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "startup", hypothesisId = "H3", location = "Plugin.cs:95", message = "DLL file is locked at constructor time", data = new { error = fileEx.Message, dllPath = dllPath }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+                            // #endregion
+                        }
+                    }
+                    
+                    // Check if there's a delete marker file (Jellyfin might use this)
+                    var deleteMarker = System.IO.Path.Combine(versionedPluginPath, ".deleteOnStartup");
+                    if (System.IO.File.Exists(deleteMarker))
+                    {
+                        _logger.LogWarning("[MR] ⚠️ DELETE MARKER FOUND: {Path}", deleteMarker);
+                        // #region agent log
+                        try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "startup", hypothesisId = "H4", location = "Plugin.cs:102", message = "Delete marker file found - folder should be deleted", data = new { deleteMarkerPath = deleteMarker }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+                        // #endregion
+                    }
                 }
+                
+                _logger.LogInformation("[MR] === Plugin Constructor - Startup Check Complete ===");
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "[MR] Could not check plugin folder path");
+                // #region agent log
+                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "startup", hypothesisId = "H5", location = "Plugin.cs:110", message = "ERROR checking plugin folder path", data = new { error = ex.Message, stackTrace = ex.StackTrace }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+                // #endregion
             }
         }
         catch (Exception ex)
