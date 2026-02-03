@@ -16,20 +16,37 @@ public static class SafeName
     /// </summary>
     /// <param name="format">The format template string.</param>
     /// <param name="name">The series name.</param>
-    /// <param name="year">The production year.</param>
+    /// <param name="year">The production year (nullable - if null, year part will be removed from format).</param>
     /// <param name="providerLabel">The provider label (e.g., tvdb, tmdb).</param>
     /// <param name="id">The provider ID.</param>
     /// <returns>The formatted and sanitized folder name.</returns>
-    public static string RenderSeriesFolder(string format, string name, int year, string providerLabel, string id)
+    public static string RenderSeriesFolder(string format, string name, int? year, string providerLabel, string id)
     {
         var hasProviderId = !string.IsNullOrWhiteSpace(providerLabel) && !string.IsNullOrWhiteSpace(id);
+        var hasYear = year.HasValue;
 
-        var s = (format ?? "{Name} ({Year}) [{Provider}-{Id}]")
-            .Replace("{Name}", name ?? string.Empty, StringComparison.OrdinalIgnoreCase)
-            .Replace("{Year}", year.ToString(CultureInfo.InvariantCulture), StringComparison.OrdinalIgnoreCase)
-            .Replace("{Provider}", providerLabel ?? string.Empty, StringComparison.OrdinalIgnoreCase)
-            .Replace("{Id}", id ?? string.Empty, StringComparison.OrdinalIgnoreCase)
-            .Trim();
+        var s = format ?? "{Name} ({Year}) [{Provider}-{Id}]";
+        
+        // Replace name
+        s = s.Replace("{Name}", name ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        
+        // Replace year if available, otherwise remove year-related parts
+        if (hasYear)
+        {
+            s = s.Replace("{Year}", year.Value.ToString(CultureInfo.InvariantCulture), StringComparison.OrdinalIgnoreCase);
+        }
+        else
+        {
+            // Remove year-related placeholders and surrounding formatting
+            s = Regex.Replace(s, @"\s*\(\s*{Year}\s*\)", string.Empty, RegexOptions.IgnoreCase);
+            s = Regex.Replace(s, @"\s*-\s*{Year}", string.Empty, RegexOptions.IgnoreCase);
+            s = Regex.Replace(s, @"\s*{Year}\s*", string.Empty, RegexOptions.IgnoreCase);
+        }
+        
+        // Replace provider and ID
+        s = s.Replace("{Provider}", providerLabel ?? string.Empty, StringComparison.OrdinalIgnoreCase)
+             .Replace("{Id}", id ?? string.Empty, StringComparison.OrdinalIgnoreCase)
+             .Trim();
 
         // Clean up empty provider brackets if no provider ID
         if (!hasProviderId)

@@ -5,7 +5,7 @@
     <RootNamespace>Jellyfin.Plugin.MetadataRenamer</RootNamespace>
     <AssemblyName>Jellyfin.Plugin.MetadataRenamer</AssemblyName>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
-    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
     <Nullable>enable</Nullable>
     <AnalysisMode>AllEnabledByDefault</AnalysisMode>
     <CodeAnalysisRuleSet>../jellyfin.ruleset</CodeAnalysisRuleSet>

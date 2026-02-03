@@ -144,18 +144,30 @@ public class RenameCoordinator
             }
 
             var name = series.Name?.Trim();
-            var year = series.ProductionYear;
-
-            _logger.LogInformation("[MR] Series metadata: Name={Name}, Year={Year}, ProviderIds={ProviderIds}",
-                name ?? "NULL", year?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", providerIdsString);
-
-            if (string.IsNullOrWhiteSpace(name) || year is null)
+            
+            // Try ProductionYear first, then PremiereDate as fallback
+            int? year = series.ProductionYear;
+            string yearSource = "ProductionYear";
+            
+            if (year is null && series.PremiereDate.HasValue)
             {
-                _logger.LogWarning(
-                    "[MR] SKIP: Missing required metadata. Name={Name}, Year={Year}",
-                    name ?? "NULL", year?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+                year = series.PremiereDate.Value.Year;
+                yearSource = "PremiereDate";
+            }
+
+            _logger.LogInformation("[MR] Series metadata: Name={Name}, Year={Year} (from {YearSource}), ProviderIds={ProviderIds}",
+                name ?? "NULL", 
+                year?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", 
+                yearSource,
+                providerIdsString);
+
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                _logger.LogWarning("[MR] SKIP: Missing required metadata. Name={Name}", name ?? "NULL");
                 return;
             }
+            
+            // Year is now optional - we'll handle it in the format rendering
 
             // Identify inference: only rename when provider ids changed
             if (cfg.OnlyRenameWhenProviderIdsChange)
@@ -244,9 +256,11 @@ public class RenameCoordinator
             var desiredFolderName = SafeName.RenderSeriesFolder(
                 cfg.SeriesFolderFormat,
                 name,
-                year.Value,
+                year,
                 providerLabel,
                 providerId);
+            
+            _logger.LogInformation("[MR] Desired folder name: {DesiredName} (year available: {HasYear})", desiredFolderName, year.HasValue);
 
             _logger.LogInformation("[MR] === Folder Rename Details ===");
             _logger.LogInformation("[MR] Current Folder: {Current}", currentFolderName);
