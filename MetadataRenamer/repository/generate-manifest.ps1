@@ -34,24 +34,24 @@ if (-not (Test-Path $manifestPath)) {
 
 $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
 
-# Jellyfin expects manifest to be an array of plugins directly
-if ($manifest -is [Array]) {
-    # Update plugin entry (first item in array)
-    $manifest[0].Checksum = $checksum
-    $manifest[0].Timestamp = $timestamp
-    $manifest[0].SourceUrl = $SourceUrl
+# Jellyfin expects manifest to be an array of plugins with versions array
+if ($manifest -is [Array] -and $manifest[0].versions) {
+    # Update version entry (first version in versions array)
+    $manifest[0].versions[0].checksum = $checksum
+    $manifest[0].versions[0].timestamp = $timestamp
+    $manifest[0].versions[0].sourceUrl = $SourceUrl
     
     # Get version from DLL if possible, or use default
     try {
         $dllInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($DllPath)
         if ($dllInfo.FileVersion) {
-            $manifest[0].Version = $dllInfo.FileVersion
+            $manifest[0].versions[0].version = $dllInfo.FileVersion
         }
     } catch {
         Write-Host "Warning: Could not read version from DLL, using manifest version" -ForegroundColor Yellow
     }
 } else {
-    Write-Host "Error: Manifest must be an array of plugins" -ForegroundColor Red
+    Write-Host "Error: Manifest must be an array with versions array" -ForegroundColor Red
     exit 1
 }
 
