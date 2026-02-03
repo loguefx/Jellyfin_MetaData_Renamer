@@ -32,10 +32,17 @@
                     </div>
                     <div class="checkboxContainer checkboxContainer-withDescription">
                         <label class="emby-checkbox-label">
+                            <input id="RenameSeasonFolders" name="RenameSeasonFolders" type="checkbox" is="emby-checkbox" />
+                            <span>Rename Season Folders</span>
+                        </label>
+                        <div class="fieldDescription">Enable automatic renaming of season folders to match metadata (e.g., "Part 1" → "Season 01")</div>
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label">
                             <input id="RenameEpisodeFiles" name="RenameEpisodeFiles" type="checkbox" is="emby-checkbox" />
                             <span>Rename Episode Files</span>
                         </label>
-                        <div class="fieldDescription">Enable automatic renaming of episode files with episode numbers and titles</div>
+                        <div class="fieldDescription">Enable automatic renaming of episode files with episode numbers and titles from metadata</div>
                     </div>
                     <div class="checkboxContainer checkboxContainer-withDescription">
                         <label class="emby-checkbox-label">
@@ -48,6 +55,11 @@
                         <label class="inputLabel inputLabelUnfocused" for="SeriesFolderFormat">Series Folder Format</label>
                         <input id="SeriesFolderFormat" name="SeriesFolderFormat" type="text" is="emby-input" />
                         <div class="fieldDescription">Format template for series folder names. Supported placeholders: {Name}, {Year}, {Provider}, {Id}</div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="SeasonFolderFormat">Season Folder Format</label>
+                        <input id="SeasonFolderFormat" name="SeasonFolderFormat" type="text" is="emby-input" />
+                        <div class="fieldDescription">Format template for season folder names. Supported placeholders: {Season}, {Season:00}, {SeasonName}</div>
                     </div>
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="EpisodeFileFormat">Episode File Format</label>
@@ -91,9 +103,11 @@
                         document.querySelector('#Enabled').checked = config.Enabled !== false;
                         document.querySelector('#DryRun').checked = config.DryRun !== false;
                         document.querySelector('#RenameSeriesFolders').checked = config.RenameSeriesFolders !== false;
+                        document.querySelector('#RenameSeasonFolders').checked = config.RenameSeasonFolders !== false;
                         document.querySelector('#RenameEpisodeFiles').checked = config.RenameEpisodeFiles !== false;
                         document.querySelector('#RequireProviderIdMatch').checked = config.RequireProviderIdMatch !== false;
                         document.querySelector('#SeriesFolderFormat').value = config.SeriesFolderFormat || '{Name} ({Year}) [{Provider}-{Id}]';
+                        document.querySelector('#SeasonFolderFormat').value = config.SeasonFolderFormat || 'Season {Season:00}';
                         document.querySelector('#EpisodeFileFormat').value = config.EpisodeFileFormat || 'S{Season:00}E{Episode:00} - {Title}';
                         document.querySelector('#PreferredSeriesProviders').value = (config.PreferredSeriesProviders || []).join(', ');
                         document.querySelector('#OnlyRenameWhenProviderIdsChange').checked = config.OnlyRenameWhenProviderIdsChange !== false;
@@ -109,9 +123,11 @@
                     config.Enabled = document.querySelector('#Enabled').checked;
                     config.DryRun = document.querySelector('#DryRun').checked;
                     config.RenameSeriesFolders = document.querySelector('#RenameSeriesFolders').checked;
+                    config.RenameSeasonFolders = document.querySelector('#RenameSeasonFolders').checked;
                     config.RenameEpisodeFiles = document.querySelector('#RenameEpisodeFiles').checked;
                     config.RequireProviderIdMatch = document.querySelector('#RequireProviderIdMatch').checked;
                     config.SeriesFolderFormat = document.querySelector('#SeriesFolderFormat').value;
+                    config.SeasonFolderFormat = document.querySelector('#SeasonFolderFormat').value;
                     config.EpisodeFileFormat = document.querySelector('#EpisodeFileFormat').value;
                     var providersText = document.querySelector('#PreferredSeriesProviders').value;
                     config.PreferredSeriesProviders = providersText ? providersText.split(',').map(function(p) { return p.trim(); }).filter(function(p) { return p.length > 0; }) : [];

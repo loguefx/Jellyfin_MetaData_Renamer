@@ -95,10 +95,10 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
                     if (System.IO.File.Exists(dllPath))
                     {
                         var dllInfo = new System.IO.FileInfo(dllPath);
-                        _logger.LogInformation("[MR] DLL File: {Path}, Size: {Size} bytes, Last Modified: {Modified}", dllPath, dllInfo.Length, dllInfo.LastWriteTime);
+                        _logger.LogInformation("[MR] DLL File: {Path}, Size: {Size} bytes, Last Modified: {Modified}", dllPath, dllInfo.Length, dllInfo.LastWriteTime.ToString(System.Globalization.CultureInfo.InvariantCulture));
                         
                         // #region agent log
-                        try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "startup", hypothesisId = "H2", location = "Plugin.cs:85", message = "DLL file exists and plugin is being loaded", data = new { dllPath = dllPath, dllSize = dllInfo.Length, lastModified = dllInfo.LastWriteTime.ToString() }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+                        try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "startup", hypothesisId = "H2", location = "Plugin.cs:85", message = "DLL file exists and plugin is being loaded", data = new { dllPath = dllPath, dllSize = dllInfo.Length, lastModified = dllInfo.LastWriteTime.ToString(System.Globalization.CultureInfo.InvariantCulture) }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
                         // #endregion
                         
                         // Try to check if file is locked

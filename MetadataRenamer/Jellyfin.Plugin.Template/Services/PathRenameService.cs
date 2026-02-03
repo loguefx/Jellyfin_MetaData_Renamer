@@ -149,6 +149,113 @@ public class PathRenameService
     }
 
     /// <summary>
+    /// Attempts to rename a season folder to the desired name.
+    /// </summary>
+    /// <param name="season">The season entity.</param>
+    /// <param name="desiredFolderName">The desired folder name.</param>
+    /// <param name="dryRun">Whether to perform a dry run (log only, no actual rename).</param>
+    public void TryRenameSeasonFolder(MediaBrowser.Controller.Entities.TV.Season season, string desiredFolderName, bool dryRun)
+    {
+        string currentPath = string.Empty;
+        string newFullPath = string.Empty;
+
+        try
+        {
+            _logger.LogInformation("[MR] === TryRenameSeasonFolder Called ===");
+            _logger.LogInformation("[MR] Season: {Name}, ID: {Id}, Season Number: {SeasonNumber}", season.Name, season.Id, season.IndexNumber);
+            _logger.LogInformation("[MR] Desired Folder Name: {Desired}", desiredFolderName);
+            _logger.LogInformation("[MR] Dry Run: {DryRun}", dryRun);
+
+            currentPath = season.Path;
+            if (string.IsNullOrWhiteSpace(currentPath))
+            {
+                _logger.LogWarning("[MR] SKIP: Season.Path is null or empty");
+                return;
+            }
+
+            _logger.LogInformation("[MR] Current Path: {Path}", currentPath);
+
+            var currentDir = new DirectoryInfo(currentPath);
+            if (!currentDir.Exists)
+            {
+                _logger.LogError("[MR] ERROR: Season folder does not exist: {Path}", currentPath);
+                return;
+            }
+
+            _logger.LogInformation("[MR] Current Directory Name: {Name}", currentDir.Name);
+            _logger.LogInformation("[MR] Current Directory Exists: {Exists}", currentDir.Exists);
+
+            var parent = currentDir.Parent;
+            if (parent == null)
+            {
+                _logger.LogError("[MR] ERROR: Cannot rename root directory: {Path}", currentPath);
+                return;
+            }
+
+            _logger.LogInformation("[MR] Parent Directory: {Parent}", parent.FullName);
+
+            if (string.Equals(currentDir.Name, desiredFolderName, StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.LogInformation("[MR] SKIP: Folder name already matches desired name. Current: {Current}, Desired: {Desired}", currentDir.Name, desiredFolderName);
+                return;
+            }
+
+            newFullPath = Path.Combine(parent.FullName, desiredFolderName);
+            _logger.LogInformation("[MR] New Full Path: {NewPath}", newFullPath);
+
+            if (Directory.Exists(newFullPath))
+            {
+                _logger.LogError("[MR] ERROR: Target folder already exists. Cannot rename. From: {From}, To: {To}", currentPath, newFullPath);
+                return;
+            }
+
+            if (dryRun)
+            {
+                _logger.LogWarning("[MR] DRY RUN MODE: Would rename {From} -> {To}", currentPath, newFullPath);
+                _logger.LogWarning("[MR] DRY RUN: No actual rename performed. Disable Dry Run mode to perform actual renames.");
+                return;
+            }
+
+            _logger.LogInformation("[MR] === Attempting Actual Rename ===");
+            _logger.LogInformation("[MR] From: {From}", currentPath);
+            _logger.LogInformation("[MR] To: {To}", newFullPath);
+            
+            Directory.Move(currentPath, newFullPath);
+            
+            _logger.LogInformation("[MR] ✓✓✓ SUCCESS: Season folder renamed successfully!");
+            _logger.LogInformation("[MR] Old: {From}", currentPath);
+            _logger.LogInformation("[MR] New: {To}", newFullPath);
+            
+            // Verify the rename
+            if (Directory.Exists(newFullPath))
+            {
+                _logger.LogInformation("[MR] ✓ Verification: New folder exists");
+            }
+            else
+            {
+                _logger.LogError("[MR] ✗ Verification FAILED: New folder does not exist after rename!");
+            }
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            _logger.LogError(ex, "[MR] ERROR: UnauthorizedAccessException - Permission denied. From: {From}, To: {To}", currentPath, newFullPath);
+        }
+        catch (DirectoryNotFoundException ex)
+        {
+            _logger.LogError(ex, "[MR] ERROR: DirectoryNotFoundException - Source directory not found. Path: {Path}", currentPath);
+        }
+        catch (IOException ex)
+        {
+            _logger.LogError(ex, "[MR] ERROR: IOException - File system error. From: {From}, To: {To}, Message: {Message}", currentPath, newFullPath, ex.Message);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[MR] ERROR: Unexpected exception during rename. Type: {Type}, Message: {Message}", ex.GetType().Name, ex.Message);
+            _logger.LogError("[MR] Stack Trace: {StackTrace}", ex.StackTrace ?? "N/A");
+        }
+    }
+
+    /// <summary>
     /// Attempts to rename an episode file to the desired name.
     /// </summary>
     /// <param name="episode">The episode entity.</param>

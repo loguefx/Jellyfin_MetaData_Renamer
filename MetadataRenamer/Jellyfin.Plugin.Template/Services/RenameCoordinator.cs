@@ -109,6 +109,13 @@ public class RenameCoordinator
                 return;
             }
 
+            // Handle Season items
+            if (e.Item is Season season && cfg.RenameSeasonFolders)
+            {
+                HandleSeasonUpdate(season, cfg, now);
+                return;
+            }
+
             // Handle Episode items
             if (e.Item is Episode episode && cfg.RenameEpisodeFiles)
             {
@@ -117,7 +124,7 @@ public class RenameCoordinator
             }
 
             // Skip other item types
-            _logger.LogInformation("[MR] SKIP: Item is not a Series or Episode. Type={Type}, Name={Name}", e.Item?.GetType().Name ?? "NULL", e.Item?.Name ?? "NULL");
+            _logger.LogInformation("[MR] SKIP: Item is not a Series, Season, or Episode. Type={Type}, Name={Name}", e.Item?.GetType().Name ?? "NULL", e.Item?.Name ?? "NULL");
             return;
         }
         catch (Exception ex)
@@ -143,9 +150,9 @@ public class RenameCoordinator
                 var timeSinceLastTry = (now - lastTry).TotalSeconds;
                 if (timeSinceLastTry < cfg.PerItemCooldownSeconds)
                 {
-                _logger.LogInformation(
-                    "[MR] SKIP: Cooldown active. SeriesId={Id}, Name={Name}, Time since last try: {Seconds} seconds (cooldown: {CooldownSeconds})",
-                    series.Id, series.Name, timeSinceLastTry.ToString(System.Globalization.CultureInfo.InvariantCulture), cfg.PerItemCooldownSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                    _logger.LogInformation(
+                        "[MR] SKIP: Cooldown active. SeriesId={Id}, Name={Name}, Time since last try: {Seconds} seconds (cooldown: {CooldownSeconds})",
+                        series.Id, series.Name, timeSinceLastTry.ToString(System.Globalization.CultureInfo.InvariantCulture), cfg.PerItemCooldownSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
                     return;
                 }
             }
@@ -319,6 +326,85 @@ public class RenameCoordinator
             _pathRenamer.TryRenameSeriesFolder(series, desiredFolderName, cfg.DryRun);
 
             _logger.LogInformation("[MR] ===== Processing Complete =====");
+    }
+
+    /// <summary>
+    /// Handles season folder renaming.
+    /// </summary>
+    private void HandleSeasonUpdate(Season season, PluginConfiguration cfg, DateTime now)
+    {
+        try
+        {
+            _logger.LogInformation("[MR] Processing Season: Name={Name}, Id={Id}, Path={Path}, Season Number={SeasonNumber}", 
+                season.Name, season.Id, season.Path, season.IndexNumber);
+
+            // Per-item cooldown
+            if (_lastAttemptUtcByItem.TryGetValue(season.Id, out var lastTry))
+            {
+                var timeSinceLastTry = (now - lastTry).TotalSeconds;
+                if (timeSinceLastTry < cfg.PerItemCooldownSeconds)
+                {
+                    _logger.LogInformation(
+                        "[MR] SKIP: Cooldown active. SeasonId={Id}, Name={Name}, Time since last try: {Seconds} seconds (cooldown: {CooldownSeconds})",
+                        season.Id, season.Name, timeSinceLastTry.ToString(System.Globalization.CultureInfo.InvariantCulture), cfg.PerItemCooldownSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                    return;
+                }
+            }
+
+            _lastAttemptUtcByItem[season.Id] = now;
+
+            var path = season.Path;
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                _logger.LogWarning("[MR] SKIP: Season has no path. SeasonId={Id}, Name={Name}", season.Id, season.Name);
+                return;
+            }
+
+            if (!Directory.Exists(path))
+            {
+                _logger.LogWarning("[MR] SKIP: Season path does not exist on disk. Path={Path}, SeasonId={Id}, Name={Name}", path, season.Id, season.Name);
+                return;
+            }
+
+            _logger.LogInformation("[MR] Season path verified: {Path}", path);
+
+            // Get season metadata
+            var seasonNumber = season.IndexNumber; // Season number (1, 2, 3, etc.)
+            var seasonName = season.Name?.Trim() ?? string.Empty;
+
+            _logger.LogInformation("[MR] Season metadata: Season Number={SeasonNumber}, Season Name={SeasonName}",
+                seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                seasonName);
+
+            if (!seasonNumber.HasValue)
+            {
+                _logger.LogWarning("[MR] SKIP: Season missing season number. SeasonId={Id}, Name={Name}", season.Id, season.Name);
+                return;
+            }
+
+            // Build desired folder name
+            var currentFolderName = Path.GetFileName(path);
+            var desiredFolderName = SafeName.RenderSeasonFolder(
+                cfg.SeasonFolderFormat,
+                seasonNumber,
+                seasonName);
+
+            _logger.LogInformation("[MR] === Season Folder Rename Details ===");
+            _logger.LogInformation("[MR] Current Folder: {Current}", currentFolderName);
+            _logger.LogInformation("[MR] Desired Folder: {Desired}", desiredFolderName);
+            _logger.LogInformation("[MR] Full Current Path: {Path}", path);
+            _logger.LogInformation("[MR] Format: {Format}", cfg.SeasonFolderFormat);
+            _logger.LogInformation("[MR] Dry Run Mode: {DryRun}", cfg.DryRun);
+
+            _pathRenamer.TryRenameSeasonFolder(season, desiredFolderName, cfg.DryRun);
+
+            _logger.LogInformation("[MR] ===== Season Processing Complete =====");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[MR] ERROR in HandleSeasonUpdate: {Message}", ex.Message);
+            _logger.LogError("[MR] Stack Trace: {StackTrace}", ex.StackTrace ?? "N/A");
+        }
     }
 
     /// <summary>
