@@ -330,6 +330,10 @@ public class RenameCoordinator
 
     /// <summary>
     /// Handles season folder renaming.
+    /// IMPORTANT: This method uses METADATA VALUES ONLY (season number and name from Jellyfin metadata).
+    /// It does NOT parse folder names to determine season numbers. All values come from:
+    /// - season.IndexNumber (season number from metadata)
+    /// - season.Name (season name from metadata)
     /// </summary>
     private void HandleSeasonUpdate(Season season, PluginConfiguration cfg, DateTime now)
     {
@@ -368,13 +372,16 @@ public class RenameCoordinator
 
             _logger.LogInformation("[MR] Season path verified: {Path}", path);
 
-            // Get season metadata
-            var seasonNumber = season.IndexNumber; // Season number (1, 2, 3, etc.)
+            // Get season metadata - ALL VALUES FROM METADATA, NOT FROM FOLDER NAME
+            var seasonNumber = season.IndexNumber; // Season number from metadata (1, 2, 3, etc.)
             var seasonName = season.Name?.Trim() ?? string.Empty;
+            var currentFolderName = Path.GetFileName(path);
 
-            _logger.LogInformation("[MR] Season metadata: Season Number={SeasonNumber}, Season Name={SeasonName}",
-                seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
-                seasonName);
+            _logger.LogInformation("[MR] === Season Metadata (from Jellyfin, NOT from folder name) ===");
+            _logger.LogInformation("[MR] Season Number: {SeasonNumber} (from metadata: IndexNumber)", 
+                seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+            _logger.LogInformation("[MR] Season Name: {SeasonName} (from metadata: Name)", seasonName);
+            _logger.LogInformation("[MR] Current Folder Name: {Current} (for reference only, not used for renaming)", currentFolderName);
 
             if (!seasonNumber.HasValue)
             {
@@ -382,8 +389,7 @@ public class RenameCoordinator
                 return;
             }
 
-            // Build desired folder name
-            var currentFolderName = Path.GetFileName(path);
+            // Build desired folder name using METADATA VALUES ONLY
             var desiredFolderName = SafeName.RenderSeasonFolder(
                 cfg.SeasonFolderFormat,
                 seasonNumber,
@@ -409,6 +415,12 @@ public class RenameCoordinator
 
     /// <summary>
     /// Handles episode file renaming.
+    /// IMPORTANT: This method uses METADATA VALUES ONLY (season number, episode number, episode title from Jellyfin metadata).
+    /// It does NOT parse filenames to determine episode numbers. All values come from:
+    /// - episode.ParentIndexNumber (season number from metadata)
+    /// - episode.IndexNumber (episode number from metadata)
+    /// - episode.Name (episode title from metadata)
+    /// - episode.SeriesName (series name from metadata)
     /// </summary>
     private void HandleEpisodeUpdate(Episode episode, PluginConfiguration cfg, DateTime now)
     {
@@ -460,10 +472,10 @@ public class RenameCoordinator
                 _logger.LogInformation("[MR] Episode is directly in series folder (no season folder structure)");
             }
 
-            // Get episode metadata
+            // Get episode metadata - ALL VALUES FROM METADATA, NOT FROM FILENAME
             var episodeTitle = episode.Name?.Trim() ?? string.Empty;
-            var seasonNumber = episode.ParentIndexNumber; // Season number (may be null for flat structures)
-            var episodeNumber = episode.IndexNumber; // Episode number
+            var seasonNumber = episode.ParentIndexNumber; // Season number from metadata (may be null for flat structures)
+            var episodeNumber = episode.IndexNumber; // Episode number from metadata
             var seriesName = episode.SeriesName?.Trim() ?? string.Empty;
             
             // Get year from series if available
@@ -477,22 +489,24 @@ public class RenameCoordinator
                 }
             }
 
-            _logger.LogInformation("[MR] Episode metadata: Series={Series}, Season={Season}, Episode={Episode}, Title={Title}, Year={Year}, InSeriesRoot={InSeriesRoot}",
-                seriesName, seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
-                episodeNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
-                episodeTitle, year?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
-                isInSeriesRoot);
+            // Get current filename for comparison (but we don't use it for determining episode numbers)
+            var currentFileName = Path.GetFileNameWithoutExtension(path);
+            
+            _logger.LogInformation("[MR] === Episode Metadata (from Jellyfin, NOT from filename) ===");
+            _logger.LogInformation("[MR] Series Name: {Series} (from metadata)", seriesName);
+            _logger.LogInformation("[MR] Season Number: {Season} (from metadata: ParentIndexNumber)", 
+                seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+            _logger.LogInformation("[MR] Episode Number: {Episode} (from metadata: IndexNumber)", 
+                episodeNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+            _logger.LogInformation("[MR] Episode Title: {Title} (from metadata: Name)", episodeTitle);
+            _logger.LogInformation("[MR] Year: {Year} (from series metadata)", year?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+            _logger.LogInformation("[MR] Current Filename: {Current} (for reference only, not used for renaming)", currentFileName);
+            _logger.LogInformation("[MR] In Series Root (flat structure): {InSeriesRoot}", isInSeriesRoot);
 
-            if (string.IsNullOrWhiteSpace(episodeTitle))
-            {
-                _logger.LogWarning("[MR] SKIP: Episode title is missing. EpisodeId={Id}", episode.Id);
-                return;
-            }
-
-            // Episode number is required, but season number is optional (for flat structures)
+            // Episode number is REQUIRED from metadata - we cannot rename without it
             if (!episodeNumber.HasValue)
             {
-                _logger.LogWarning("[MR] SKIP: Episode missing episode number. Season={Season}, Episode={Episode}", 
+                _logger.LogWarning("[MR] SKIP: Episode missing episode number in metadata. Cannot determine correct episode number. Season={Season}, Episode={Episode}", 
                     seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
                     episodeNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
                 return;
@@ -501,11 +515,17 @@ public class RenameCoordinator
             // Log if season number is missing (common for flat structures)
             if (!seasonNumber.HasValue)
             {
-                _logger.LogInformation("[MR] Note: Episode has no season number (flat structure). Season placeholders in format will be removed.");
+                _logger.LogInformation("[MR] Note: Episode has no season number in metadata (flat structure). Season placeholders in format will be removed.");
             }
 
-            // Build desired file name (without extension)
-            var currentFileName = Path.GetFileNameWithoutExtension(path);
+            // Episode title is preferred but not required - we can still rename with just episode number
+            if (string.IsNullOrWhiteSpace(episodeTitle))
+            {
+                _logger.LogWarning("[MR] Warning: Episode title is missing in metadata. Will use episode number only for renaming. EpisodeId={Id}", episode.Id);
+                episodeTitle = string.Empty; // Use empty string, format will handle it
+            }
+
+            // Build desired file name (without extension) using METADATA VALUES ONLY
             var fileExtension = Path.GetExtension(path);
             var desiredFileName = SafeName.RenderEpisodeFileName(
                 cfg.EpisodeFileFormat,
@@ -516,10 +536,18 @@ public class RenameCoordinator
                 year);
 
             _logger.LogInformation("[MR] === Episode File Rename Details ===");
-            _logger.LogInformation("[MR] Current File: {Current}{Extension}", currentFileName, fileExtension);
-            _logger.LogInformation("[MR] Desired File: {Desired}{Extension}", desiredFileName, fileExtension);
-            _logger.LogInformation("[MR] Format: {Format}", cfg.EpisodeFileFormat);
+            _logger.LogInformation("[MR] Current File: {Current}{Extension} (will be renamed using metadata values)", currentFileName, fileExtension);
+            _logger.LogInformation("[MR] Desired File: {Desired}{Extension} (based on metadata: S{Season}E{Episode} - {Title})", 
+                desiredFileName, fileExtension,
+                seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "?",
+                episodeNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                episodeTitle);
+            _logger.LogInformation("[MR] Format Template: {Format}", cfg.EpisodeFileFormat);
             _logger.LogInformation("[MR] Dry Run Mode: {DryRun}", cfg.DryRun);
+            _logger.LogInformation("[MR] ✓ Using metadata values: Season={Season}, Episode={Episode}, Title={Title}", 
+                seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "N/A",
+                episodeNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                string.IsNullOrWhiteSpace(episodeTitle) ? "(no title)" : episodeTitle);
 
             _pathRenamer.TryRenameEpisodeFile(episode, desiredFileName, fileExtension, cfg.DryRun);
 
