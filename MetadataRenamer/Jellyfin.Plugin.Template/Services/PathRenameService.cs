@@ -147,4 +147,116 @@ public class PathRenameService
             _logger.LogError("[MR] Stack Trace: {StackTrace}", ex.StackTrace ?? "N/A");
         }
     }
+
+    /// <summary>
+    /// Attempts to rename an episode file to the desired name.
+    /// </summary>
+    /// <param name="episode">The episode entity.</param>
+    /// <param name="desiredFileName">The desired file name (without extension).</param>
+    /// <param name="fileExtension">The file extension (including the dot).</param>
+    /// <param name="dryRun">Whether to perform a dry run (log only, no actual rename).</param>
+    public void TryRenameEpisodeFile(Episode episode, string desiredFileName, string fileExtension, bool dryRun)
+    {
+        string currentPath = string.Empty;
+        string newFullPath = string.Empty;
+
+        try
+        {
+            _logger.LogInformation("[MR] === TryRenameEpisodeFile Called ===");
+            _logger.LogInformation("[MR] Episode: {Name}, ID: {Id}", episode.Name, episode.Id);
+            _logger.LogInformation("[MR] Desired File Name: {Desired}{Extension}", desiredFileName, fileExtension);
+            _logger.LogInformation("[MR] Dry Run: {DryRun}", dryRun);
+
+            currentPath = episode.Path;
+            if (string.IsNullOrWhiteSpace(currentPath))
+            {
+                _logger.LogWarning("[MR] SKIP: Episode.Path is null or empty");
+                return;
+            }
+
+            _logger.LogInformation("[MR] Current Path: {Path}", currentPath);
+
+            var currentFile = new FileInfo(currentPath);
+            if (!currentFile.Exists)
+            {
+                _logger.LogError("[MR] ERROR: Episode file does not exist: {Path}", currentPath);
+                return;
+            }
+
+            _logger.LogInformation("[MR] Current File Name: {Name}", currentFile.Name);
+            _logger.LogInformation("[MR] Current File Exists: {Exists}", currentFile.Exists);
+
+            var directory = currentFile.Directory;
+            if (directory == null)
+            {
+                _logger.LogError("[MR] ERROR: Cannot determine directory for file: {Path}", currentPath);
+                return;
+            }
+
+            _logger.LogInformation("[MR] Directory: {Directory}", directory.FullName);
+
+            var currentFileNameWithoutExt = Path.GetFileNameWithoutExtension(currentFile.Name);
+            var newFileName = desiredFileName + fileExtension;
+
+            if (string.Equals(currentFileNameWithoutExt, desiredFileName, StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.LogInformation("[MR] SKIP: File name already matches desired name. Current: {Current}, Desired: {Desired}", 
+                    currentFileNameWithoutExt, desiredFileName);
+                return;
+            }
+
+            newFullPath = Path.Combine(directory.FullName, newFileName);
+            _logger.LogInformation("[MR] New Full Path: {NewPath}", newFullPath);
+
+            if (File.Exists(newFullPath))
+            {
+                _logger.LogError("[MR] ERROR: Target file already exists. Cannot rename. From: {From}, To: {To}", currentPath, newFullPath);
+                return;
+            }
+
+            if (dryRun)
+            {
+                _logger.LogWarning("[MR] DRY RUN MODE: Would rename {From} -> {To}", currentPath, newFullPath);
+                _logger.LogWarning("[MR] DRY RUN: No actual rename performed. Disable Dry Run mode to perform actual renames.");
+                return;
+            }
+
+            _logger.LogInformation("[MR] === Attempting Actual Rename ===");
+            _logger.LogInformation("[MR] From: {From}", currentPath);
+            _logger.LogInformation("[MR] To: {To}", newFullPath);
+            
+            File.Move(currentPath, newFullPath);
+            
+            _logger.LogInformation("[MR] ✓✓✓ SUCCESS: Episode file renamed successfully!");
+            _logger.LogInformation("[MR] Old: {From}", currentPath);
+            _logger.LogInformation("[MR] New: {To}", newFullPath);
+            
+            // Verify the rename
+            if (File.Exists(newFullPath))
+            {
+                _logger.LogInformation("[MR] ✓ Verification: New file exists");
+            }
+            else
+            {
+                _logger.LogError("[MR] ✗ Verification FAILED: New file does not exist after rename!");
+            }
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            _logger.LogError(ex, "[MR] ERROR: UnauthorizedAccessException - Permission denied. From: {From}, To: {To}", currentPath, newFullPath);
+        }
+        catch (FileNotFoundException ex)
+        {
+            _logger.LogError(ex, "[MR] ERROR: FileNotFoundException - Source file not found. Path: {Path}", currentPath);
+        }
+        catch (IOException ex)
+        {
+            _logger.LogError(ex, "[MR] ERROR: IOException - File system error. From: {From}, To: {To}, Message: {Message}", currentPath, newFullPath, ex.Message);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[MR] ERROR: Unexpected exception during rename. Type: {Type}, Message: {Message}", ex.GetType().Name, ex.Message);
+            _logger.LogError("[MR] Stack Trace: {StackTrace}", ex.StackTrace ?? "N/A");
+        }
+    }
 }

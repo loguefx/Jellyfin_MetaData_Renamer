@@ -32,6 +32,13 @@
                     </div>
                     <div class="checkboxContainer checkboxContainer-withDescription">
                         <label class="emby-checkbox-label">
+                            <input id="RenameEpisodeFiles" name="RenameEpisodeFiles" type="checkbox" is="emby-checkbox" />
+                            <span>Rename Episode Files</span>
+                        </label>
+                        <div class="fieldDescription">Enable automatic renaming of episode files with episode numbers and titles</div>
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label">
                             <input id="RequireProviderIdMatch" name="RequireProviderIdMatch" type="checkbox" is="emby-checkbox" />
                             <span>Require Provider ID Match</span>
                         </label>
@@ -41,6 +48,11 @@
                         <label class="inputLabel inputLabelUnfocused" for="SeriesFolderFormat">Series Folder Format</label>
                         <input id="SeriesFolderFormat" name="SeriesFolderFormat" type="text" is="emby-input" />
                         <div class="fieldDescription">Format template for series folder names. Supported placeholders: {Name}, {Year}, {Provider}, {Id}</div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="EpisodeFileFormat">Episode File Format</label>
+                        <input id="EpisodeFileFormat" name="EpisodeFileFormat" type="text" is="emby-input" />
+                        <div class="fieldDescription">Format template for episode file names. Supported placeholders: {SeriesName}, {Season}, {Season:00}, {Episode}, {Episode:00}, {Title}, {Year}</div>
                     </div>
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="PreferredSeriesProviders">Preferred Series Providers</label>
@@ -79,8 +91,10 @@
                         document.querySelector('#Enabled').checked = config.Enabled !== false;
                         document.querySelector('#DryRun').checked = config.DryRun !== false;
                         document.querySelector('#RenameSeriesFolders').checked = config.RenameSeriesFolders !== false;
+                        document.querySelector('#RenameEpisodeFiles').checked = config.RenameEpisodeFiles !== false;
                         document.querySelector('#RequireProviderIdMatch').checked = config.RequireProviderIdMatch !== false;
                         document.querySelector('#SeriesFolderFormat').value = config.SeriesFolderFormat || '{Name} ({Year}) [{Provider}-{Id}]';
+                        document.querySelector('#EpisodeFileFormat').value = config.EpisodeFileFormat || 'S{Season:00}E{Episode:00} - {Title}';
                         document.querySelector('#PreferredSeriesProviders').value = (config.PreferredSeriesProviders || []).join(', ');
                         document.querySelector('#OnlyRenameWhenProviderIdsChange').checked = config.OnlyRenameWhenProviderIdsChange !== false;
                         document.querySelector('#PerItemCooldownSeconds').value = config.PerItemCooldownSeconds || 60;
@@ -95,8 +109,10 @@
                     config.Enabled = document.querySelector('#Enabled').checked;
                     config.DryRun = document.querySelector('#DryRun').checked;
                     config.RenameSeriesFolders = document.querySelector('#RenameSeriesFolders').checked;
+                    config.RenameEpisodeFiles = document.querySelector('#RenameEpisodeFiles').checked;
                     config.RequireProviderIdMatch = document.querySelector('#RequireProviderIdMatch').checked;
                     config.SeriesFolderFormat = document.querySelector('#SeriesFolderFormat').value;
+                    config.EpisodeFileFormat = document.querySelector('#EpisodeFileFormat').value;
                     var providersText = document.querySelector('#PreferredSeriesProviders').value;
                     config.PreferredSeriesProviders = providersText ? providersText.split(',').map(function(p) { return p.trim(); }).filter(function(p) { return p.length > 0; }) : [];
                     config.OnlyRenameWhenProviderIdsChange = document.querySelector('#OnlyRenameWhenProviderIdsChange').checked;

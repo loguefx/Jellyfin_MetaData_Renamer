@@ -6,6 +6,7 @@ using Jellyfin.Plugin.MetadataRenamer.Configuration;
 using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
 using Microsoft.Extensions.Logging;
+using MediaBrowser.Controller.Entities;
 
 namespace Jellyfin.Plugin.MetadataRenamer.Services;
 
@@ -101,16 +102,40 @@ public class RenameCoordinator
 
             _lastGlobalActionUtc = now;
 
-            if (e.Item is not Series series)
+            // Handle Series items
+            if (e.Item is Series series)
             {
-                // #region agent log
-                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "C", location = "RenameCoordinator.cs:69", message = "Item is not Series", data = new { itemType = e.Item?.GetType().Name ?? "null", itemName = e.Item?.Name ?? "null" }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
-                // #endregion
-                _logger.LogInformation("[MR] SKIP: Item is not a Series. Type={Type}, Name={Name}", e.Item?.GetType().Name ?? "NULL", e.Item?.Name ?? "NULL");
+                HandleSeriesUpdate(series, cfg, now);
                 return;
             }
 
-            _logger.LogInformation("[MR] Processing Series: Name={Name}, Id={Id}, Path={Path}", series.Name, series.Id, series.Path);
+            // Handle Episode items
+            if (e.Item is Episode episode && cfg.RenameEpisodeFiles)
+            {
+                HandleEpisodeUpdate(episode, cfg, now);
+                return;
+            }
+
+            // Skip other item types
+            _logger.LogInformation("[MR] SKIP: Item is not a Series or Episode. Type={Type}, Name={Name}", e.Item?.GetType().Name ?? "NULL", e.Item?.Name ?? "NULL");
+            return;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[MR] CRITICAL ERROR in HandleItemUpdated: {Message}", ex.Message);
+            _logger.LogError("[MR] Stack Trace: {StackTrace}", ex.StackTrace ?? "N/A");
+            // #region agent log
+            try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "A", location = "RenameCoordinator.cs:252", message = "CRITICAL ERROR in HandleItemUpdated", data = new { error = ex.Message, stackTrace = ex.StackTrace }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+            // #endregion
+        }
+    }
+
+    /// <summary>
+    /// Handles series folder renaming.
+    /// </summary>
+    private void HandleSeriesUpdate(Series series, PluginConfiguration cfg, DateTime now)
+    {
+        _logger.LogInformation("[MR] Processing Series: Name={Name}, Id={Id}, Path={Path}", series.Name, series.Id, series.Path);
 
             // Per-item cooldown
             if (_lastAttemptUtcByItem.TryGetValue(series.Id, out var lastTry))
@@ -294,10 +319,107 @@ public class RenameCoordinator
             _pathRenamer.TryRenameSeriesFolder(series, desiredFolderName, cfg.DryRun);
 
             _logger.LogInformation("[MR] ===== Processing Complete =====");
+    }
+
+    /// <summary>
+    /// Handles episode file renaming.
+    /// </summary>
+    private void HandleEpisodeUpdate(Episode episode, PluginConfiguration cfg, DateTime now)
+    {
+        try
+        {
+            _logger.LogInformation("[MR] Processing Episode: Name={Name}, Id={Id}, Path={Path}", episode.Name, episode.Id, episode.Path);
+
+            // Per-item cooldown
+            if (_lastAttemptUtcByItem.TryGetValue(episode.Id, out var lastTry))
+            {
+                var timeSinceLastTry = (now - lastTry).TotalSeconds;
+                if (timeSinceLastTry < cfg.PerItemCooldownSeconds)
+                {
+                    _logger.LogInformation(
+                        "[MR] SKIP: Cooldown active. EpisodeId={Id}, Name={Name}, Time since last try: {Seconds} seconds (cooldown: {CooldownSeconds})",
+                        episode.Id, episode.Name, timeSinceLastTry.ToString(System.Globalization.CultureInfo.InvariantCulture), cfg.PerItemCooldownSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                    return;
+                }
+            }
+
+            _lastAttemptUtcByItem[episode.Id] = now;
+
+            var path = episode.Path;
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                _logger.LogWarning("[MR] SKIP: Episode has no path. EpisodeId={Id}, Name={Name}", episode.Id, episode.Name);
+                return;
+            }
+
+            if (!File.Exists(path))
+            {
+                _logger.LogWarning("[MR] SKIP: Episode file does not exist on disk. Path={Path}, EpisodeId={Id}, Name={Name}", path, episode.Id, episode.Name);
+                return;
+            }
+
+            _logger.LogInformation("[MR] Episode file path verified: {Path}", path);
+
+            // Get episode metadata
+            var episodeTitle = episode.Name?.Trim() ?? string.Empty;
+            var seasonNumber = episode.ParentIndexNumber; // Season number
+            var episodeNumber = episode.IndexNumber; // Episode number
+            var seriesName = episode.SeriesName?.Trim() ?? string.Empty;
+            
+            // Get year from series if available
+            int? year = null;
+            if (episode.Series != null)
+            {
+                year = episode.Series.ProductionYear;
+                if (year is null && episode.Series.PremiereDate.HasValue)
+                {
+                    year = episode.Series.PremiereDate.Value.Year;
+                }
+            }
+
+            _logger.LogInformation("[MR] Episode metadata: Series={Series}, Season={Season}, Episode={Episode}, Title={Title}, Year={Year}",
+                seriesName, seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                episodeNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                episodeTitle, year?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+
+            if (string.IsNullOrWhiteSpace(episodeTitle))
+            {
+                _logger.LogWarning("[MR] SKIP: Episode title is missing. EpisodeId={Id}", episode.Id);
+                return;
+            }
+
+            if (!seasonNumber.HasValue || !episodeNumber.HasValue)
+            {
+                _logger.LogWarning("[MR] SKIP: Episode missing season or episode number. Season={Season}, Episode={Episode}", 
+                    seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                    episodeNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+                return;
+            }
+
+            // Build desired file name (without extension)
+            var currentFileName = Path.GetFileNameWithoutExtension(path);
+            var fileExtension = Path.GetExtension(path);
+            var desiredFileName = SafeName.RenderEpisodeFileName(
+                cfg.EpisodeFileFormat,
+                seriesName,
+                seasonNumber,
+                episodeNumber,
+                episodeTitle,
+                year);
+
+            _logger.LogInformation("[MR] === Episode File Rename Details ===");
+            _logger.LogInformation("[MR] Current File: {Current}{Extension}", currentFileName, fileExtension);
+            _logger.LogInformation("[MR] Desired File: {Desired}{Extension}", desiredFileName, fileExtension);
+            _logger.LogInformation("[MR] Format: {Format}", cfg.EpisodeFileFormat);
+            _logger.LogInformation("[MR] Dry Run Mode: {DryRun}", cfg.DryRun);
+
+            _pathRenamer.TryRenameEpisodeFile(episode, desiredFileName, fileExtension, cfg.DryRun);
+
+            _logger.LogInformation("[MR] ===== Episode Processing Complete =====");
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "[MR] ERROR in HandleItemUpdated: {Message}", ex.Message);
+            _logger.LogError(ex, "[MR] ERROR in HandleEpisodeUpdate: {Message}", ex.Message);
             _logger.LogError("[MR] Stack Trace: {StackTrace}", ex.StackTrace ?? "N/A");
         }
     }

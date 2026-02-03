@@ -19,8 +19,10 @@ public class PluginConfiguration : BasePluginConfiguration
         Enabled = true;
         DryRun = true;
         RenameSeriesFolders = true;
+        RenameEpisodeFiles = true;
         RequireProviderIdMatch = true;
         SeriesFolderFormat = "{Name} ({Year}) [{Provider}-{Id}]";
+        EpisodeFileFormat = "S{Season:00}E{Episode:00} - {Title}";
         PreferredSeriesProviders = new Collection<string> { "Tvdb", "Tmdb", "Imdb" };
         OnlyRenameWhenProviderIdsChange = true;
         PerItemCooldownSeconds = 60;
@@ -43,6 +45,11 @@ public class PluginConfiguration : BasePluginConfiguration
     public bool RenameSeriesFolders { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether to rename episode files.
+    /// </summary>
+    public bool RenameEpisodeFiles { get; set; }
+
+    /// <summary>
     /// Gets or sets a value indicating whether to require a provider ID match before renaming.
     /// </summary>
     public bool RequireProviderIdMatch { get; set; }
@@ -52,6 +59,12 @@ public class PluginConfiguration : BasePluginConfiguration
     /// Supported placeholders: {Name}, {Year}, {Provider}, {Id}.
     /// </summary>
     public string SeriesFolderFormat { get; set; }
+
+    /// <summary>
+    /// Gets or sets the format string for episode file names.
+    /// Supported placeholders: {SeriesName}, {Season}, {Episode}, {Title}, {Year}.
+    /// </summary>
+    public string EpisodeFileFormat { get; set; }
 
     /// <summary>
     /// Gets or sets the list of preferred provider keys in order of preference.

@@ -62,6 +62,69 @@ public static class SafeName
     }
 
     /// <summary>
+    /// Renders an episode file name using the specified format template.
+    /// </summary>
+    /// <param name="format">The format template string.</param>
+    /// <param name="seriesName">The series name.</param>
+    /// <param name="seasonNumber">The season number (nullable).</param>
+    /// <param name="episodeNumber">The episode number (nullable).</param>
+    /// <param name="episodeTitle">The episode title.</param>
+    /// <param name="year">The production year (nullable).</param>
+    /// <returns>The formatted and sanitized file name (without extension).</returns>
+    public static string RenderEpisodeFileName(string format, string seriesName, int? seasonNumber, int? episodeNumber, string episodeTitle, int? year)
+    {
+        var s = format ?? "S{Season:00}E{Episode:00} - {Title}";
+        
+        // Replace series name
+        s = s.Replace("{SeriesName}", seriesName ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        
+        // Replace season number
+        if (seasonNumber.HasValue)
+        {
+            // Handle format specifiers like {Season:00} for zero-padding
+            s = Regex.Replace(s, @"{Season:(\d+)}", seasonNumber.Value.ToString($"D$1", CultureInfo.InvariantCulture), RegexOptions.IgnoreCase);
+            s = s.Replace("{Season}", seasonNumber.Value.ToString(CultureInfo.InvariantCulture), StringComparison.OrdinalIgnoreCase);
+        }
+        else
+        {
+            // Remove season-related placeholders
+            s = Regex.Replace(s, @"{Season:?\d*}", string.Empty, RegexOptions.IgnoreCase);
+        }
+        
+        // Replace episode number
+        if (episodeNumber.HasValue)
+        {
+            // Handle format specifiers like {Episode:00} for zero-padding
+            s = Regex.Replace(s, @"{Episode:(\d+)}", episodeNumber.Value.ToString($"D$1", CultureInfo.InvariantCulture), RegexOptions.IgnoreCase);
+            s = s.Replace("{Episode}", episodeNumber.Value.ToString(CultureInfo.InvariantCulture), StringComparison.OrdinalIgnoreCase);
+        }
+        else
+        {
+            // Remove episode-related placeholders
+            s = Regex.Replace(s, @"{Episode:?\d*}", string.Empty, RegexOptions.IgnoreCase);
+        }
+        
+        // Replace episode title
+        s = s.Replace("{Title}", episodeTitle ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        
+        // Replace year if available
+        if (year.HasValue)
+        {
+            s = s.Replace("{Year}", year.Value.ToString(CultureInfo.InvariantCulture), StringComparison.OrdinalIgnoreCase);
+        }
+        else
+        {
+            // Remove year-related placeholders
+            s = Regex.Replace(s, @"\s*\(\s*{Year}\s*\)", string.Empty, RegexOptions.IgnoreCase);
+            s = Regex.Replace(s, @"\s*-\s*{Year}", string.Empty, RegexOptions.IgnoreCase);
+            s = Regex.Replace(s, @"\s*{Year}\s*", string.Empty, RegexOptions.IgnoreCase);
+        }
+        
+        s = CollapseSpaces(s);
+        return SanitizeFileName(s);
+    }
+
+    /// <summary>
     /// Sanitizes a filename by removing invalid filesystem characters.
     /// </summary>
     /// <param name="input">The input string to sanitize.</param>
