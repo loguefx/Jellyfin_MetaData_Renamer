@@ -39,7 +39,7 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
         ILibraryManager libraryManager,
         ILoggerFactory loggerFactory)
         : base(applicationPaths, xmlSerializer)
-    {
+        {
         try
         {
             _logger = loggerFactory.CreateLogger<Plugin>();
@@ -50,6 +50,31 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
             // #region agent log
             try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "A", location = "Plugin.cs:33", message = "Plugin constructor", data = new { pluginName = Name, pluginId = Id.ToString(), dataPath = applicationPaths?.DataPath ?? "null" }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
             // #endregion
+            
+            // CRITICAL: Check for deleteOnStartup marker BEFORE any initialization
+            // This prevents the plugin from loading if it's marked for deletion,
+            // allowing Jellyfin to delete the folder
+            var pluginsPath = applicationPaths?.PluginsPath ?? "UNKNOWN";
+            var pluginVersion = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "1.0.0.0";
+            var versionedPluginPath = System.IO.Path.Combine(pluginsPath, $"{Name}_{pluginVersion}");
+            var deleteMarkerPath = System.IO.Path.Combine(versionedPluginPath, ".deleteOnStartup");
+            
+            // Also check parent directory for delete marker (Jellyfin may place it there)
+            var parentDeleteMarker = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(versionedPluginPath) ?? pluginsPath, ".deleteOnStartup");
+            
+            if (System.IO.File.Exists(deleteMarkerPath) || System.IO.File.Exists(parentDeleteMarker))
+            {
+                _logger.LogWarning("[MR] ⚠️ DELETE MARKER DETECTED - Plugin marked for deletion. Throwing exception to prevent loading.");
+                _logger.LogWarning("[MR] Delete marker path: {Path}", System.IO.File.Exists(deleteMarkerPath) ? deleteMarkerPath : parentDeleteMarker);
+                _logger.LogWarning("[MR] This allows Jellyfin to delete the plugin folder without loading the DLL.");
+                
+                // Throw exception to prevent plugin from loading
+                // This ensures the DLL isn't loaded, allowing Jellyfin to delete the folder
+                throw new InvalidOperationException(
+                    $"Plugin is marked for deletion (deleteOnStartup marker found). " +
+                    $"This prevents the plugin from loading, allowing Jellyfin to delete the folder. " +
+                    $"Marker path: {(System.IO.File.Exists(deleteMarkerPath) ? deleteMarkerPath : parentDeleteMarker)}");
+            }
             
             Instance = this;
             _libraryManager = libraryManager;
@@ -68,10 +93,8 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
             // Log plugin folder path and check for deleteOnStartup marker
             try
             {
-                var pluginsPath = applicationPaths?.PluginsPath ?? "UNKNOWN";
                 var pluginPath = System.IO.Path.Combine(pluginsPath, Name);
-                var version = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "1.0.0.0";
-                var versionedPluginPath = System.IO.Path.Combine(pluginsPath, $"{Name}_{version}");
+                var version = pluginVersion;
                 
                 _logger.LogInformation("[MR] === Plugin Constructor - Startup Check ===");
                 _logger.LogInformation("[MR] Plugins Base Path: {Path}", pluginsPath);
@@ -116,16 +139,6 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
                             try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "startup", hypothesisId = "H3", location = "Plugin.cs:95", message = "DLL file is locked at constructor time", data = new { error = fileEx.Message, dllPath = dllPath }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
                             // #endregion
                         }
-                    }
-                    
-                    // Check if there's a delete marker file (Jellyfin might use this)
-                    var deleteMarker = System.IO.Path.Combine(versionedPluginPath, ".deleteOnStartup");
-                    if (System.IO.File.Exists(deleteMarker))
-                    {
-                        _logger.LogWarning("[MR] ⚠️ DELETE MARKER FOUND: {Path}", deleteMarker);
-                        // #region agent log
-                        try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "startup", hypothesisId = "H4", location = "Plugin.cs:102", message = "Delete marker file found - folder should be deleted", data = new { deleteMarkerPath = deleteMarker }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
-                        // #endregion
                     }
                 }
                 
