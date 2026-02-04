@@ -72,8 +72,8 @@ public class RenameCoordinator
             _logger.LogInformation("[MR] Item Name: {Name}", e.Item?.Name ?? "NULL");
             _logger.LogInformation("[MR] Item ID: {Id}", e.Item?.Id.ToString() ?? "NULL");
             _logger.LogInformation(
-                "[MR] Configuration: Enabled={Enabled}, RenameSeriesFolders={RenameSeriesFolders}, DryRun={DryRun}, RequireProviderIdMatch={RequireProviderIdMatch}, OnlyRenameWhenProviderIdsChange={OnlyRenameWhenProviderIdsChange}",
-                cfg.Enabled, cfg.RenameSeriesFolders, cfg.DryRun, cfg.RequireProviderIdMatch, cfg.OnlyRenameWhenProviderIdsChange);
+                "[MR] Configuration: Enabled={Enabled}, RenameSeriesFolders={RenameSeriesFolders}, RenameSeasonFolders={RenameSeasonFolders}, RenameEpisodeFiles={RenameEpisodeFiles}, DryRun={DryRun}, RequireProviderIdMatch={RequireProviderIdMatch}, OnlyRenameWhenProviderIdsChange={OnlyRenameWhenProviderIdsChange}",
+                cfg.Enabled, cfg.RenameSeriesFolders, cfg.RenameSeasonFolders, cfg.RenameEpisodeFiles, cfg.DryRun, cfg.RequireProviderIdMatch, cfg.OnlyRenameWhenProviderIdsChange);
 
             if (!cfg.Enabled)
             {
@@ -81,12 +81,6 @@ public class RenameCoordinator
                 try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "D", location = "RenameCoordinator.cs:49", message = "Plugin disabled", data = new { itemType = e.Item?.GetType().Name ?? "null" }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
                 // #endregion
                 _logger.LogWarning("[MR] SKIP: Plugin is disabled in configuration");
-                return;
-            }
-
-            if (!cfg.RenameSeriesFolders)
-            {
-                _logger.LogWarning("[MR] SKIP: RenameSeriesFolders is disabled in configuration");
                 return;
             }
 
@@ -105,20 +99,35 @@ public class RenameCoordinator
             // Handle Series items
             if (e.Item is Series series)
             {
+                if (!cfg.RenameSeriesFolders)
+                {
+                    _logger.LogInformation("[MR] SKIP: RenameSeriesFolders is disabled in configuration");
+                    return;
+                }
                 HandleSeriesUpdate(series, cfg, now);
                 return;
             }
 
             // Handle Season items
-            if (e.Item is Season season && cfg.RenameSeasonFolders)
+            if (e.Item is Season season)
             {
+                if (!cfg.RenameSeasonFolders)
+                {
+                    _logger.LogInformation("[MR] SKIP: RenameSeasonFolders is disabled in configuration");
+                    return;
+                }
                 HandleSeasonUpdate(season, cfg, now);
                 return;
             }
 
             // Handle Episode items
-            if (e.Item is Episode episode && cfg.RenameEpisodeFiles)
+            if (e.Item is Episode episode)
             {
+                if (!cfg.RenameEpisodeFiles)
+                {
+                    _logger.LogInformation("[MR] SKIP: RenameEpisodeFiles is disabled in configuration");
+                    return;
+                }
                 HandleEpisodeUpdate(episode, cfg, now);
                 return;
             }
