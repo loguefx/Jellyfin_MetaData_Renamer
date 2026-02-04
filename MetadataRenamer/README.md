@@ -6,6 +6,15 @@ Automatically renames series folders, season folders, and episode files when met
 
 **For episode file renaming to take effect, you must perform a library scan after identifying or updating metadata.** The plugin processes episodes when Jellyfin fires `ItemUpdated` events, which occur during library scans. Simply identifying a series will rename the series folder, but episode files will be renamed during the next library scan.
 
+## 🔄 Automatic Processing During Library Scans
+
+**New Feature:** The plugin can now automatically update folder names and episode files during library scans (full or regular) to match metadata. This is controlled by the **"Process During Library Scans"** configuration option:
+
+- **Enabled (default):** Library scans will automatically update all series folders, season folders, and episode files to match their metadata, even if provider IDs haven't changed
+- **Disabled:** Library scans won't automatically update items; only the "Identify" flow will trigger updates (when provider IDs change)
+
+**Note:** The "Identify" flow always works regardless of this setting - when you press "Identify" and select metadata, the plugin will process the item.
+
 ## Examples
 
 ### Series Folders
@@ -78,9 +87,9 @@ The plugin will **rename episode files** when:
 1. ✅ **Episode renaming is enabled** in plugin settings
 2. ✅ **Episode has valid metadata** (episode number and title from Jellyfin)
 3. ✅ **Episode number matches filename** (safety check prevents incorrect renames)
-4. ✅ **Library scan has occurred** (episodes are processed during library scans via `ItemUpdated` events)
+4. ✅ **Library scan has occurred** (episodes are processed during library scans via `ItemUpdated` events) **OR** "Process During Library Scans" is enabled
 
-**Note:** Episode renaming requires a library scan to trigger. After identifying a series, perform a library scan to rename episode files.
+**Note:** Episode renaming requires a library scan to trigger. After identifying a series, perform a library scan to rename episode files. If "Process During Library Scans" is enabled, full library scans will automatically update all episode files to match metadata.
 
 ### Key Feature: Smart Detection
 
@@ -94,11 +103,13 @@ This is the "smart detection" feature that prevents unnecessary renames:
 
 ### Real-World Scenarios
 
-#### ✅ Scenario 1: New Library Scan
+#### ✅ Scenario 1: New Library Scan (ProcessDuringLibraryScans Enabled)
 1. You add a new library with series folders
 2. Jellyfin scans and automatically matches some series
-3. **Result:** Plugin detects provider ID changes → Renames series folders to proper format
-4. **After library scan:** Episode files are renamed using metadata (if episode renaming is enabled)
+3. **Result:** 
+   - Plugin detects provider ID changes → Renames series folders to proper format
+   - If "Process During Library Scans" is enabled → All series folders, season folders, and episode files are updated to match metadata during the scan
+   - Episode files are renamed using metadata (if episode renaming is enabled)
 
 #### ✅ Scenario 2: Manual Identify with Episode Renaming
 1. You have a series "The Flash" that's not matched
@@ -135,8 +146,11 @@ This is the "smart detection" feature that prevents unnecessary renames:
 - ✅ **Series folders:** When you press **"Identify"** and change to a different match
 - ✅ **Series folders:** When you manually refresh metadata and it finds new provider IDs
 - ✅ **Series folders:** During library scans if series get matched for the first time
+- ✅ **Series folders:** During full library scans if "Process During Library Scans" is enabled (updates all folders to match metadata)
 - ✅ **Episode files:** During library scans when episodes have valid metadata (episode number and title)
+- ✅ **Episode files:** During full library scans if "Process During Library Scans" is enabled (updates all episode files to match metadata)
 - ✅ **Season folders:** When season metadata is available and season renaming is enabled
+- ✅ **Season folders:** During full library scans if "Process During Library Scans" is enabled
 
 **WON'T Rename:**
 - ❌ During normal library scans (if provider IDs don't change)
@@ -161,6 +175,7 @@ Access plugin settings: **Dashboard** > **Plugins** > **MetadataRenamer**
 | **Rename Episode Files** | `true` | Enable/disable episode file renaming |
 | **Require Provider ID Match** | `true` | Only rename series with provider IDs |
 | **Only Rename When Provider IDs Change** | `true` | Smart detection - only rename when IDs change |
+| **Process During Library Scans** | `true` | When enabled, library scans (full or regular) will automatically update folder names and episode files to match metadata. When disabled, only the "Identify" flow triggers updates. |
 | **Series Folder Format** | `{Name} ({Year}) [{Provider}-{Id}]` | Customize series folder naming format |
 | **Season Folder Format** | `Season {Season:00}` | Customize season folder naming format |
 | **Episode File Format** | `S{Season:00}E{Episode:00} - {Title}` | Customize episode file naming format |
@@ -332,10 +347,18 @@ Look for log entries prefixed with `[MR]`:
 ### Episode Files Not Renaming
 
 1. **Perform a library scan** - Episode renaming requires a library scan to trigger
-2. **Check episode renaming is enabled** - Go to plugin settings and verify "Rename Episode Files" is enabled
-3. **Check episode metadata** - Episodes must have episode number and title in Jellyfin metadata
-4. **Check episode number validation** - If filename episode number doesn't match metadata, rename is skipped (safety feature)
-5. **Check logs** - Look for `[MR] Episode File Rename Details` entries to see what's happening
+2. **Check "Process During Library Scans" setting** - If disabled, only the "Identify" flow will trigger updates. Enable it to process episodes during library scans.
+3. **Check episode renaming is enabled** - Go to plugin settings and verify "Rename Episode Files" is enabled
+4. **Check episode metadata** - Episodes must have episode number and title in Jellyfin metadata
+5. **Check episode number validation** - If filename episode number doesn't match metadata, rename is skipped (safety feature)
+6. **Check logs** - Look for `[MR] Episode File Rename Details` entries to see what's happening
+
+### Folder Names Not Updating During Library Scans
+
+1. **Check "Process During Library Scans" setting** - This must be enabled for automatic updates during library scans
+2. **Check "Only Rename When Provider IDs Change" setting** - If enabled, items will only be processed if provider IDs changed OR "Process During Library Scans" is enabled
+3. **Perform a full library scan** - Go to Dashboard > Libraries > Select your library > Scan Library (Full)
+4. **Check logs** - Look for `[MR] ProcessDuringLibraryScans` entries to see if the setting is being applied
 
 ### Want to Rename Without Provider ID Change?
 
