@@ -195,6 +195,16 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
                 _logger.LogWarning("[MR] Delete marker path: {Path}", foundMarkerPath);
                 _logger.LogWarning("[MR] This allows Jellyfin to delete the plugin folder without loading the DLL.");
                 
+                // #region agent log - Uninstall debugging
+                try
+                {
+                    var logData = new { sessionId = "debug-session", runId = "run1", hypothesisId = "UNINSTALL-A", location = "Plugin.cs:142", message = "Delete marker found - throwing exception", data = new { markerPath = foundMarkerPath, pluginName = Name, pluginVersion = pluginVersion, pluginsPath = pluginsPath }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
+                    var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                    System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson);
+                }
+                catch { }
+                // #endregion
+                
                 // Throw exception to prevent plugin from loading
                 // This ensures the DLL isn't loaded, allowing Jellyfin to delete the folder
                 throw new InvalidOperationException(
@@ -204,6 +214,18 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
             }
             
             _logger.LogInformation("[MR] ✓ No delete marker found - plugin will load normally");
+            
+            // #region agent log - Uninstall debugging
+            try
+            {
+                var logData = new { sessionId = "debug-session", runId = "run1", hypothesisId = "UNINSTALL-A", location = "Plugin.cs:156", message = "No delete marker found - plugin loading", data = new { pluginName = Name, pluginVersion = pluginVersion, pluginsPath = pluginsPath, versionedFolderExists = System.IO.Directory.Exists(versionedPluginPath), nonVersionedFolderExists = System.IO.Directory.Exists(nonVersionedPluginPath) }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
+                var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson);
+                _logger.LogInformation("[MR] [DEBUG-UNINSTALL-A] No delete marker - plugin loading. VersionedFolder={VersionedExists}, NonVersionedFolder={NonVersionedExists}", 
+                    System.IO.Directory.Exists(versionedPluginPath), System.IO.Directory.Exists(nonVersionedPluginPath));
+            }
+            catch { }
+            // #endregion
             
             Instance = this;
             _libraryManager = libraryManager;
@@ -387,9 +409,23 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
     {
         try
         {
+            // #region agent log - Uninstall debugging
+            try
+            {
+                var pluginsPath = ApplicationPaths?.PluginsPath ?? "UNKNOWN";
+                var version = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "1.0.0.0";
+                var versionedPluginPath = System.IO.Path.Combine(pluginsPath, $"{Name}_{version}");
+                var logData = new { sessionId = "debug-session", runId = "run1", hypothesisId = "UNINSTALL-B", location = "Plugin.cs:257", message = "Dispose() called", data = new { disposed = _disposed, instanceSet = Instance != null, pluginName = Name, pluginVersion = version, versionedFolderPath = versionedPluginPath, versionedFolderExists = System.IO.Directory.Exists(versionedPluginPath) }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
+                var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson);
+            }
+            catch { }
+            // #endregion
+            
             _logger?.LogInformation("[MR] ===== Dispose() Called =====");
             _logger?.LogInformation("[MR] Current Disposed State: {Disposed}", _disposed);
             _logger?.LogInformation("[MR] Static Instance Set: {InstanceSet}", Instance != null);
+            _logger?.LogInformation("[MR] [DEBUG-UNINSTALL-B] Dispose() entry: Disposed={Disposed}, InstanceSet={InstanceSet}", _disposed, Instance != null);
 
             // #region agent log
             try
@@ -513,23 +549,39 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
                         // This must happen synchronously to ensure the DLL can be unloaded
                         if (_libraryManager != null)
                         {
-                            // #region agent log
-                            try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "A", location = "Plugin.cs:164", message = "Unsubscribing from events", data = new { }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+                            // #region agent log - Uninstall debugging
+                            try
+                            {
+                                var logData = new { sessionId = "debug-session", runId = "run1", hypothesisId = "UNINSTALL-C", location = "Plugin.cs:550", message = "Unsubscribing from events", data = new { libraryManagerExists = _libraryManager != null }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
+                                var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                                System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson);
+                                _logger?.LogInformation("[MR] [DEBUG-UNINSTALL-C] Unsubscribing from events - LibraryManager exists: {Exists}", _libraryManager != null);
+                            }
+                            catch { }
                             // #endregion
                             _libraryManager.ItemUpdated -= OnItemUpdated;
                             _logger?.LogInformation("[MR] ✓ Event handler unsubscribed successfully");
+                            _logger?.LogInformation("[MR] [DEBUG-UNINSTALL-C] Event handler unsubscribed successfully");
                         }
                         else
                         {
                             _logger?.LogWarning("[MR] LibraryManager is null - cannot unsubscribe");
+                            _logger?.LogWarning("[MR] [DEBUG-UNINSTALL-C] LibraryManager is NULL - cannot unsubscribe");
                         }
                     }
                     catch (Exception ex)
                     {
                         _logger?.LogError(ex, "[MR] ERROR unsubscribing from events: {Message}", ex.Message);
                         _logger?.LogError("[MR] Stack Trace: {StackTrace}", ex.StackTrace ?? "N/A");
-                        // #region agent log
-                        try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "A", location = "Plugin.cs:175", message = "ERROR unsubscribing", data = new { error = ex.Message, stackTrace = ex.StackTrace }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+                        // #region agent log - Uninstall debugging
+                        try
+                        {
+                            var logData = new { sessionId = "debug-session", runId = "run1", hypothesisId = "UNINSTALL-C", location = "Plugin.cs:565", message = "ERROR unsubscribing from events", data = new { error = ex.Message, stackTrace = ex.StackTrace, errorType = ex.GetType().FullName }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
+                            var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                            System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson);
+                            _logger?.LogError("[MR] [DEBUG-UNINSTALL-C] ERROR unsubscribing: {Error}", ex.Message);
+                        }
+                        catch { }
                         // #endregion
                     }
 
@@ -726,10 +778,25 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
                     }
 
                     _logger?.LogInformation("[MR] === Dispose() Cleanup Complete ===");
+                    _logger?.LogInformation("[MR] [DEBUG-UNINSTALL-E] Dispose() cleanup complete");
+                    
+                    // #region agent log - Uninstall debugging
+                    try
+                    {
+                        var pluginsPath = ApplicationPaths?.PluginsPath ?? "UNKNOWN";
+                        var version = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "1.0.0.0";
+                        var versionedPluginPath = System.IO.Path.Combine(pluginsPath, $"{Name}_{version}");
+                        var logData = new { sessionId = "debug-session", runId = "run1", hypothesisId = "UNINSTALL-E", location = "Plugin.cs:600", message = "Dispose() cleanup complete", data = new { versionedFolderExists = System.IO.Directory.Exists(versionedPluginPath), versionedFolderPath = versionedPluginPath }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
+                        var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                        System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson);
+                    }
+                    catch { }
+                    // #endregion
                 }
                 else
                 {
                     _logger?.LogInformation("[MR] disposing=false - only unmanaged resources");
+                    _logger?.LogInformation("[MR] [DEBUG-UNINSTALL-E] disposing=false - only unmanaged resources");
                 }
             }
         }
@@ -737,8 +804,15 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
         {
             _logger?.LogError(ex, "[MR] CRITICAL ERROR in Dispose(bool): {Message}", ex.Message);
             _logger?.LogError("[MR] Stack Trace: {StackTrace}", ex.StackTrace ?? "N/A");
-            // #region agent log
-            try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "A", location = "Plugin.cs:220", message = "CRITICAL ERROR in Dispose", data = new { error = ex.Message, stackTrace = ex.StackTrace }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+            // #region agent log - Uninstall debugging
+            try
+            {
+                var logData = new { sessionId = "debug-session", runId = "run1", hypothesisId = "UNINSTALL-E", location = "Plugin.cs:615", message = "CRITICAL ERROR in Dispose", data = new { error = ex.Message, stackTrace = ex.StackTrace, errorType = ex.GetType().FullName }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
+                var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson);
+                _logger?.LogError("[MR] [DEBUG-UNINSTALL-E] CRITICAL ERROR in Dispose: {Error}", ex.Message);
+            }
+            catch { }
             // #endregion
         }
     }
