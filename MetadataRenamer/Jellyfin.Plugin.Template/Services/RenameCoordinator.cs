@@ -480,11 +480,77 @@ public class RenameCoordinator
             if (isInSeriesRoot)
             {
                 _logger.LogInformation("[MR] Episode is directly in series folder (no season folder structure)");
+                
+                // Create "Season 1" folder and move episode into it
+                // This ensures Jellyfin shows "Season 1" instead of "Season Unknown"
+                var season1FolderName = SafeName.RenderSeasonFolder(cfg.SeasonFolderFormat, 1, null);
+                var season1FolderPath = Path.Combine(seriesPath, season1FolderName);
+                
+                _logger.LogInformation("[MR] === Creating Season 1 Folder for Flat Structure ===");
+                _logger.LogInformation("[MR] Season 1 Folder Name: {FolderName}", season1FolderName);
+                _logger.LogInformation("[MR] Season 1 Folder Path: {FolderPath}", season1FolderPath);
+                
+                if (!Directory.Exists(season1FolderPath))
+                {
+                    if (cfg.DryRun)
+                    {
+                        _logger.LogWarning("[MR] DRY RUN: Would create Season 1 folder: {Path}", season1FolderPath);
+                    }
+                    else
+                    {
+                        Directory.CreateDirectory(season1FolderPath);
+                        _logger.LogInformation("[MR] ✓ Created Season 1 folder: {Path}", season1FolderPath);
+                    }
+                }
+                else
+                {
+                    _logger.LogInformation("[MR] Season 1 folder already exists: {Path}", season1FolderPath);
+                }
+                
+                // Move episode file to Season 1 folder
+                var fileName = Path.GetFileName(path);
+                var newEpisodePath = Path.Combine(season1FolderPath, fileName);
+                
+                if (!File.Exists(newEpisodePath))
+                {
+                    if (cfg.DryRun)
+                    {
+                        _logger.LogWarning("[MR] DRY RUN: Would move episode file from {From} to {To}", path, newEpisodePath);
+                    }
+                    else
+                    {
+                        File.Move(path, newEpisodePath);
+                        _logger.LogInformation("[MR] ✓ Moved episode file to Season 1 folder");
+                        _logger.LogInformation("[MR] From: {From}", path);
+                        _logger.LogInformation("[MR] To: {To}", newEpisodePath);
+                        
+                        // Update path for subsequent processing
+                        path = newEpisodePath;
+                        episodeDirectory = season1FolderPath;
+                        isInSeriesRoot = false; // No longer in series root
+                    }
+                }
+                else
+                {
+                    _logger.LogWarning("[MR] Target file already exists in Season 1 folder. Skipping move. Path: {Path}", newEpisodePath);
+                    // Update path for subsequent processing
+                    path = newEpisodePath;
+                    episodeDirectory = season1FolderPath;
+                    isInSeriesRoot = false;
+                }
             }
 
             // Get episode metadata - ALL VALUES FROM METADATA, NOT FROM FILENAME
             var episodeTitle = episode.Name?.Trim() ?? string.Empty;
-            var seasonNumber = episode.ParentIndexNumber; // Season number from metadata (may be null for flat structures)
+            // Determine season number:
+            // - If episode was in series root (flat structure), we created Season 1 folder, so use season 1
+            // - Otherwise, use metadata season number, defaulting to 1 if null
+            int? seasonNumber = episode.ParentIndexNumber;
+            if (isInSeriesRoot || seasonNumber == null)
+            {
+                // If in series root (flat structure) or no season in metadata, use season 1
+                seasonNumber = 1;
+            }
             var episodeNumber = episode.IndexNumber; // Episode number from metadata
             var seriesName = episode.SeriesName?.Trim() ?? string.Empty;
             

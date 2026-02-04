@@ -134,13 +134,22 @@ public static class SafeName
         if (episodeNumber.HasValue)
         {
             // Handle format specifiers like {Episode:00} for zero-padding
-            s = Regex.Replace(s, @"{Episode:(\d+)}", episodeNumber.Value.ToString($"D$1", CultureInfo.InvariantCulture), RegexOptions.IgnoreCase);
+            // First replace {Episode:XX} patterns (e.g., {Episode:00} -> 09)
+            s = Regex.Replace(s, @"{Episode:(\d+)}", m =>
+            {
+                var padding = int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
+                return episodeNumber.Value.ToString($"D{padding}", CultureInfo.InvariantCulture);
+            }, RegexOptions.IgnoreCase);
+            // Then replace simple {Episode} placeholder
             s = s.Replace("{Episode}", episodeNumber.Value.ToString(CultureInfo.InvariantCulture), StringComparison.OrdinalIgnoreCase);
         }
         else
         {
-            // Remove episode-related placeholders
-            s = Regex.Replace(s, @"{Episode:?\d*}", string.Empty, RegexOptions.IgnoreCase);
+            // Remove episode-related placeholders - need to match both {Episode:XX} and {Episode}
+            // Match {Episode:XX} first (with colon and digits)
+            s = Regex.Replace(s, @"{Episode:\d+}", string.Empty, RegexOptions.IgnoreCase);
+            // Then match simple {Episode}
+            s = Regex.Replace(s, @"{Episode}", string.Empty, RegexOptions.IgnoreCase);
         }
         
         // Replace episode title
