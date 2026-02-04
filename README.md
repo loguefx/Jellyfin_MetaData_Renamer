@@ -1,12 +1,27 @@
 # MetadataRenamer - Jellyfin Plugin
 
-Automatically renames series folders when metadata is identified in Jellyfin, using the format: `{SeriesName} ({Year}) [{provider}-{id}]`
+Automatically renames series folders, season folders, and episode files when metadata is identified in Jellyfin, using metadata from providers like TVDB, TMDB, and IMDB.
+
+## ⚠️ Important: Library Scan Required for Episode Renaming
+
+**For episode file renaming to take effect, you must perform a library scan after identifying or updating metadata.** The plugin processes episodes when Jellyfin fires `ItemUpdated` events, which occur during library scans. Simply identifying a series will rename the series folder, but episode files will be renamed during the next library scan.
 
 ## Examples
 
+### Series Folders
 - `The Flash (2014) [tvdb-279121]`
 - `The Office (2005) [tmdb-2316]`
 - `Breaking Bad (2008) [imdb-tt0903747]`
+
+### Season Folders
+- `Season 01`
+- `Season 02`
+- `Season 1` (customizable format)
+
+### Episode Files
+- `S01E01 - Pilot.mp4`
+- `S02E05 - The Darkness and the Light.mp4`
+- `E09 - Episode Title.mp4` (for flat structures without season folders)
 
 ## Installation
 
@@ -39,17 +54,33 @@ Automatically renames series folders when metadata is identified in Jellyfin, us
 
 ### Overview
 
-MetadataRenamer listens to Jellyfin's library update events and automatically renames series folders when metadata is identified or changed. It uses smart detection to only rename when it's safe to do so.
+MetadataRenamer listens to Jellyfin's library update events and automatically renames:
+- **Series folders** - When metadata is identified or changed
+- **Season folders** - When season metadata is available
+- **Episode files** - Using episode numbers and titles from metadata
+
+The plugin uses smart detection to only rename when it's safe to do so, and validates episode numbers to prevent incorrect renames.
 
 ### When Does It Rename?
 
-The plugin will **only rename** when ALL of these conditions are met:
+#### Series Folders
+The plugin will **only rename series folders** when ALL of these conditions are met:
 
 1. ✅ **Item is a Series** (movies and other types are ignored)
 2. ✅ **Series has a valid folder path** (folder exists on disk)
 3. ✅ **Series has Name and ProductionYear** (required for naming)
 4. ✅ **Series has at least one Provider ID** (Tvdb, Tmdb, Imdb, etc.)
 5. ✅ **Provider IDs have changed** (if `OnlyRenameWhenProviderIdsChange` is enabled - **default: true**)
+
+#### Episode Files
+The plugin will **rename episode files** when:
+
+1. ✅ **Episode renaming is enabled** in plugin settings
+2. ✅ **Episode has valid metadata** (episode number and title from Jellyfin)
+3. ✅ **Episode number matches filename** (safety check prevents incorrect renames)
+4. ✅ **Library scan has occurred** (episodes are processed during library scans via `ItemUpdated` events)
+
+**Note:** Episode renaming requires a library scan to trigger. After identifying a series, perform a library scan to rename episode files.
 
 ### Key Feature: Smart Detection
 
@@ -66,36 +97,54 @@ This is the "smart detection" feature that prevents unnecessary renames:
 #### ✅ Scenario 1: New Library Scan
 1. You add a new library with series folders
 2. Jellyfin scans and automatically matches some series
-3. **Result:** Plugin detects provider ID changes → Renames folders to proper format
+3. **Result:** Plugin detects provider ID changes → Renames series folders to proper format
+4. **After library scan:** Episode files are renamed using metadata (if episode renaming is enabled)
 
-#### ✅ Scenario 2: Manual Identify
+#### ✅ Scenario 2: Manual Identify with Episode Renaming
 1. You have a series "The Flash" that's not matched
 2. You press **"Identify"** and select "The Flash (2014)"
-3. **Result:** Provider IDs are added → Plugin renames to `The Flash (2014) [tvdb-279121]`
+3. **Result:** Provider IDs are added → Plugin renames series folder to `The Flash (2014) [tvdb-279121]`
+4. **Perform a library scan** → Episode files are renamed: `S01E01 - Pilot.mp4`, `S01E02 - Fastest Man Alive.mp4`, etc.
 
-#### ✅ Scenario 3: Change Identity
-1. Series is currently "The Flash (2014) [tvdb-279121]"
-2. You press **"Identify"** and change it to "The Flash (2023)"
-3. **Result:** Provider IDs change → Plugin renames to `The Flash (2023) [tvdb-XXXXX]`
+#### ✅ Scenario 3: Flat Structure (No Season Folders)
+1. Series has episodes directly in the series folder (no season subfolders)
+2. You identify the series and perform a library scan
+3. **Result:** 
+   - Series folder renamed: `The Flash (2014) [tvdb-279121]`
+   - "Season 01" folder created automatically
+   - Episodes moved to "Season 01" folder
+   - Episodes renamed: `S01E01 - Pilot.mp4`, etc.
 
-#### ❌ Scenario 4: Regular Library Scan (No Changes)
+#### ✅ Scenario 4: Existing Season Folders
+1. Series already has "Season 1", "Season 2" folders
+2. You identify the series and perform a library scan
+3. **Result:**
+   - Series folder renamed: `The Flash (2014) [tvdb-279121]`
+   - Season folders left untouched (no changes)
+   - Episodes renamed using their actual season numbers: `S01E01 - Pilot.mp4`, `S02E05 - The Darkness and the Light.mp4`, etc.
+
+#### ❌ Scenario 5: Regular Library Scan (No Changes)
 1. Series already has provider IDs: `The Flash (2014) [tvdb-279121]`
 2. Regular library scan runs (no metadata changes)
-3. **Result:** Provider IDs unchanged → Plugin skips (no rename)
+3. **Result:** Provider IDs unchanged → Plugin skips series rename (no rename)
 
 ### What This Means
 
 **WILL Rename:**
-- ✅ When you press **"Identify"** and select a match
-- ✅ When you press **"Identify"** and change to a different match
-- ✅ When you manually refresh metadata and it finds new provider IDs
-- ✅ During library scans if series get matched for the first time
+- ✅ **Series folders:** When you press **"Identify"** and select a match
+- ✅ **Series folders:** When you press **"Identify"** and change to a different match
+- ✅ **Series folders:** When you manually refresh metadata and it finds new provider IDs
+- ✅ **Series folders:** During library scans if series get matched for the first time
+- ✅ **Episode files:** During library scans when episodes have valid metadata (episode number and title)
+- ✅ **Season folders:** When season metadata is available and season renaming is enabled
 
 **WON'T Rename:**
 - ❌ During normal library scans (if provider IDs don't change)
 - ❌ On every metadata update (only when provider IDs actually change)
 - ❌ Movies or other non-series items
 - ❌ Series without provider IDs (unless `RequireProviderIdMatch` is disabled)
+- ❌ Episodes if episode number in filename doesn't match metadata (safety check)
+- ❌ Episodes without performing a library scan (episodes are processed during scans)
 
 ## Configuration
 
@@ -107,16 +156,21 @@ Access plugin settings: **Dashboard** > **Plugins** > **MetadataRenamer**
 |---------|---------|-------------|
 | **Enabled** | `true` | Turn the plugin on/off |
 | **Dry Run Mode** | `true` | Log only, don't actually rename (start here!) |
-| **Rename Series Folders** | `true` | Enable/disable series renaming |
+| **Rename Series Folders** | `true` | Enable/disable series folder renaming |
+| **Rename Season Folders** | `true` | Enable/disable season folder renaming |
+| **Rename Episode Files** | `true` | Enable/disable episode file renaming |
 | **Require Provider ID Match** | `true` | Only rename series with provider IDs |
 | **Only Rename When Provider IDs Change** | `true` | Smart detection - only rename when IDs change |
-| **Series Folder Format** | `{Name} ({Year}) [{Provider}-{Id}]` | Customize naming format |
+| **Series Folder Format** | `{Name} ({Year}) [{Provider}-{Id}]` | Customize series folder naming format |
+| **Season Folder Format** | `Season {Season:00}` | Customize season folder naming format |
+| **Episode File Format** | `S{Season:00}E{Episode:00} - {Title}` | Customize episode file naming format |
 | **Preferred Series Providers** | `Tvdb, Tmdb, Imdb` | Order of provider preference |
 | **Per-Item Cooldown (seconds)** | `60` | Cooldown between rename attempts |
 
-### Custom Format
+### Custom Formats
 
-You can customize the folder name format using these placeholders:
+#### Series Folder Format
+You can customize the series folder name format using these placeholders:
 - `{Name}` - Series name
 - `{Year}` - Production year
 - `{Provider}` - Provider label (tvdb, tmdb, imdb)
@@ -126,6 +180,31 @@ Examples:
 - `{Name} ({Year}) [{Provider}-{Id}]` → `The Flash (2014) [tvdb-279121]`
 - `{Name} - {Year} - {Provider}-{Id}` → `The Flash - 2014 - tvdb-279121`
 - `[{Provider}] {Name} ({Year})` → `[tvdb] The Flash (2014)`
+
+#### Season Folder Format
+Customize season folder names using:
+- `{Season}` - Season number (e.g., `1`, `2`)
+- `{Season:00}` - Season number with zero-padding (e.g., `01`, `02`)
+
+Examples:
+- `Season {Season:00}` → `Season 01`, `Season 02`
+- `S{Season}` → `S1`, `S2`
+- `Season {Season}` → `Season 1`, `Season 2`
+
+#### Episode File Format
+Customize episode file names using:
+- `{Series}` - Series name
+- `{Season}` - Season number (e.g., `1`, `2`)
+- `{Season:00}` - Season number with zero-padding (e.g., `01`, `02`)
+- `{Episode}` - Episode number (e.g., `1`, `5`)
+- `{Episode:00}` - Episode number with zero-padding (e.g., `01`, `05`)
+- `{Title}` - Episode title
+- `{Year}` - Production year
+
+Examples:
+- `S{Season:00}E{Episode:00} - {Title}` → `S01E01 - Pilot.mp4`
+- `{Series} - S{Season:00}E{Episode:00} - {Title}` → `The Flash - S01E01 - Pilot.mp4`
+- `E{Episode:00} - {Title}` → `E01 - Pilot.mp4` (for flat structures without season folders)
 
 ## Safety Features
 
@@ -145,6 +224,16 @@ Examples:
 ### 4. Provider ID Change Detection
 - Only renames when provider IDs actually change
 - Prevents unnecessary renames during normal operations
+
+### 5. Episode Number Validation
+- Validates episode number in filename matches metadata episode number
+- Prevents incorrect renames (e.g., won't rename "episode 1" to "episode 5" if metadata is wrong)
+- Only proceeds if episode numbers match or filename has no episode number
+
+### 6. Smart Season Folder Detection
+- Detects existing season folders and leaves them untouched
+- Only creates "Season 01" folder for flat structures (episodes in series root)
+- Automatically organizes flat structures into season folders
 
 ## Testing
 
@@ -167,7 +256,7 @@ Examples:
 4. Identify another series
 5. The folder should now actually rename
 
-### Step 3: Verify
+### Step 3: Verify Series Renaming
 
 1. Check the series folder on disk
 2. It should be renamed to: `Series Name (Year) [provider-id]`
@@ -175,6 +264,19 @@ Examples:
    ```
    [MR] Renaming: Old Name -> New Name
    [MR] RENAMED OK: Old Name -> New Name
+   ```
+
+### Step 4: Test Episode Renaming
+
+1. **Important:** Perform a library scan after identifying the series
+2. Go to **Dashboard** > **Libraries** > Select your library > **Scan Library**
+3. Wait for the scan to complete
+4. Check episode files on disk - they should be renamed with episode numbers and titles
+5. Check Jellyfin logs for:
+   ```
+   [MR] Episode File Rename Details
+   [MR] Current File: episode1.mp4
+   [MR] Desired File: S01E01 - Pilot.mp4
    ```
 
 ## Logs
@@ -196,6 +298,8 @@ Look for log entries prefixed with `[MR]`:
 - `[MR] DRY RUN rename: ...` - Dry run mode (no actual rename)
 - `[MR] Renaming: ...` - Actual rename happening
 - `[MR] RENAMED OK: ...` - Rename successful
+- `[MR] Episode File Rename Details` - Episode renaming information
+- `[MR] Episode is already in a season folder` - Episode processing in season folders
 - `[MR] Skip: ...` - Why a rename was skipped
 
 ## Troubleshooting
@@ -224,6 +328,14 @@ Look for log entries prefixed with `[MR]`:
 2. **Check if provider IDs actually changed** - Plugin only renames when IDs change
 3. **Check logs** - Look for skip reasons
 4. **Verify series has name and year** - Both are required
+
+### Episode Files Not Renaming
+
+1. **Perform a library scan** - Episode renaming requires a library scan to trigger
+2. **Check episode renaming is enabled** - Go to plugin settings and verify "Rename Episode Files" is enabled
+3. **Check episode metadata** - Episodes must have episode number and title in Jellyfin metadata
+4. **Check episode number validation** - If filename episode number doesn't match metadata, rename is skipped (safety feature)
+5. **Check logs** - Look for `[MR] Episode File Rename Details` entries to see what's happening
 
 ### Want to Rename Without Provider ID Change?
 
