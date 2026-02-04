@@ -59,18 +59,46 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
             var versionedPluginPath = System.IO.Path.Combine(pluginsPath, $"{Name}_{pluginVersion}");
             var nonVersionedPluginPath = System.IO.Path.Combine(pluginsPath, Name);
             
+            // Get the actual DLL location (most reliable path)
+            var assemblyLocation = System.Reflection.Assembly.GetExecutingAssembly().Location;
+            var dllDirectory = !string.IsNullOrWhiteSpace(assemblyLocation) 
+                ? System.IO.Path.GetDirectoryName(assemblyLocation) 
+                : null;
+            
             // Check for delete marker in multiple locations (Jellyfin may place it in different places)
-            var deleteMarkerPaths = new List<string>
+            var deleteMarkerPaths = new List<string>();
+            
+            // Most important: Check in the DLL's actual directory (where Jellyfin likely places it)
+            if (!string.IsNullOrWhiteSpace(dllDirectory))
             {
-                System.IO.Path.Combine(versionedPluginPath, ".deleteOnStartup"),           // Versioned folder
-                System.IO.Path.Combine(nonVersionedPluginPath, ".deleteOnStartup"),       // Non-versioned folder
-                System.IO.Path.Combine(pluginsPath, ".deleteOnStartup"),                  // Plugins root
-                System.IO.Path.Combine(System.IO.Path.GetDirectoryName(versionedPluginPath) ?? pluginsPath, ".deleteOnStartup")  // Parent of versioned folder
-            };
+                deleteMarkerPaths.Add(System.IO.Path.Combine(dllDirectory, ".deleteOnStartup"));
+            }
+            
+            // Also check standard locations
+            deleteMarkerPaths.Add(System.IO.Path.Combine(versionedPluginPath, ".deleteOnStartup"));           // Versioned folder
+            deleteMarkerPaths.Add(System.IO.Path.Combine(nonVersionedPluginPath, ".deleteOnStartup"));       // Non-versioned folder
+            deleteMarkerPaths.Add(System.IO.Path.Combine(pluginsPath, ".deleteOnStartup"));                  // Plugins root
+            deleteMarkerPaths.Add(System.IO.Path.Combine(System.IO.Path.GetDirectoryName(versionedPluginPath) ?? pluginsPath, ".deleteOnStartup"));  // Parent of versioned folder
+            
+            // Check parent of DLL directory
+            if (!string.IsNullOrWhiteSpace(dllDirectory))
+            {
+                var dllParent = System.IO.Path.GetDirectoryName(dllDirectory);
+                if (!string.IsNullOrWhiteSpace(dllParent))
+                {
+                    deleteMarkerPaths.Add(System.IO.Path.Combine(dllParent, ".deleteOnStartup"));
+                }
+            }
             
             // Also check for case variations (Windows is case-insensitive, but be thorough)
             var deleteMarkerVariations = new List<string>();
-            foreach (var basePath in new[] { versionedPluginPath, nonVersionedPluginPath, pluginsPath })
+            var basePaths = new List<string> { versionedPluginPath, nonVersionedPluginPath, pluginsPath };
+            if (!string.IsNullOrWhiteSpace(dllDirectory))
+            {
+                basePaths.Add(dllDirectory);
+            }
+            
+            foreach (var basePath in basePaths)
             {
                 if (!string.IsNullOrWhiteSpace(basePath))
                 {
@@ -83,6 +111,8 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
             // Log all paths we're checking
             _logger.LogInformation("[MR] === Delete Marker Detection Check ===");
             _logger.LogInformation("[MR] Plugins Path: {Path}", pluginsPath);
+            _logger.LogInformation("[MR] DLL Location: {Location}", assemblyLocation ?? "NULL");
+            _logger.LogInformation("[MR] DLL Directory: {Directory}", dllDirectory ?? "NULL");
             _logger.LogInformation("[MR] Versioned Plugin Path: {Path}", versionedPluginPath);
             _logger.LogInformation("[MR] Non-Versioned Plugin Path: {Path}", nonVersionedPluginPath);
             _logger.LogInformation("[MR] Plugin Version: {Version}", pluginVersion);
@@ -166,9 +196,26 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
                 _logger.LogWarning(parentEx, "[MR] Could not check parent directory for delete markers: {Message}", parentEx.Message);
             }
             
-            // Check all marker paths
+            // Check all marker paths (prioritize DLL directory first)
             string? foundMarkerPath = null;
-            foreach (var markerPath in deleteMarkerPaths.Concat(deleteMarkerVariations).Distinct())
+            var allMarkerPaths = deleteMarkerPaths.Concat(deleteMarkerVariations).Distinct().ToList();
+            
+            // Sort to check DLL directory first (most likely location)
+            if (!string.IsNullOrWhiteSpace(dllDirectory))
+            {
+                var dllMarkerPath = System.IO.Path.Combine(dllDirectory, ".deleteOnStartup");
+                if (allMarkerPaths.Contains(dllMarkerPath))
+                {
+                    var index = allMarkerPaths.IndexOf(dllMarkerPath);
+                    if (index > 0)
+                    {
+                        allMarkerPaths.RemoveAt(index);
+                        allMarkerPaths.Insert(0, dllMarkerPath);
+                    }
+                }
+            }
+            
+            foreach (var markerPath in allMarkerPaths)
             {
                 try
                 {
@@ -200,7 +247,7 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
                 {
                     var logData = new { sessionId = "debug-session", runId = "run1", hypothesisId = "UNINSTALL-A", location = "Plugin.cs:142", message = "Delete marker found - throwing exception", data = new { markerPath = foundMarkerPath, pluginName = Name, pluginVersion = pluginVersion, pluginsPath = pluginsPath }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
                     var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                    System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson);
+                    try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
                 }
                 catch { }
                 // #endregion
@@ -220,7 +267,7 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
             {
                 var logData = new { sessionId = "debug-session", runId = "run1", hypothesisId = "UNINSTALL-A", location = "Plugin.cs:156", message = "No delete marker found - plugin loading", data = new { pluginName = Name, pluginVersion = pluginVersion, pluginsPath = pluginsPath, versionedFolderExists = System.IO.Directory.Exists(versionedPluginPath), nonVersionedFolderExists = System.IO.Directory.Exists(nonVersionedPluginPath) }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
                 var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson);
+                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
                 _logger.LogInformation("[MR] [DEBUG-UNINSTALL-A] No delete marker - plugin loading. VersionedFolder={VersionedExists}, NonVersionedFolder={NonVersionedExists}", 
                     System.IO.Directory.Exists(versionedPluginPath), System.IO.Directory.Exists(nonVersionedPluginPath));
             }
@@ -417,7 +464,7 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
                 var versionedPluginPath = System.IO.Path.Combine(pluginsPath, $"{Name}_{version}");
                 var logData = new { sessionId = "debug-session", runId = "run1", hypothesisId = "UNINSTALL-B", location = "Plugin.cs:257", message = "Dispose() called", data = new { disposed = _disposed, instanceSet = Instance != null, pluginName = Name, pluginVersion = version, versionedFolderPath = versionedPluginPath, versionedFolderExists = System.IO.Directory.Exists(versionedPluginPath) }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
                 var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson);
+                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
             }
             catch { }
             // #endregion
@@ -554,7 +601,7 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
                             {
                                 var logData = new { sessionId = "debug-session", runId = "run1", hypothesisId = "UNINSTALL-C", location = "Plugin.cs:550", message = "Unsubscribing from events", data = new { libraryManagerExists = _libraryManager != null }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
                                 var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                                System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson);
+                                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
                                 _logger?.LogInformation("[MR] [DEBUG-UNINSTALL-C] Unsubscribing from events - LibraryManager exists: {Exists}", _libraryManager != null);
                             }
                             catch { }
@@ -578,7 +625,7 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
                         {
                             var logData = new { sessionId = "debug-session", runId = "run1", hypothesisId = "UNINSTALL-C", location = "Plugin.cs:565", message = "ERROR unsubscribing from events", data = new { error = ex.Message, stackTrace = ex.StackTrace, errorType = ex.GetType().FullName }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
                             var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                            System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson);
+                            try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
                             _logger?.LogError("[MR] [DEBUG-UNINSTALL-C] ERROR unsubscribing: {Error}", ex.Message);
                         }
                         catch { }
@@ -788,7 +835,7 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
                         var versionedPluginPath = System.IO.Path.Combine(pluginsPath, $"{Name}_{version}");
                         var logData = new { sessionId = "debug-session", runId = "run1", hypothesisId = "UNINSTALL-E", location = "Plugin.cs:600", message = "Dispose() cleanup complete", data = new { versionedFolderExists = System.IO.Directory.Exists(versionedPluginPath), versionedFolderPath = versionedPluginPath }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
                         var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                        System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson);
+                        try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
                     }
                     catch { }
                     // #endregion
@@ -809,7 +856,7 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
             {
                 var logData = new { sessionId = "debug-session", runId = "run1", hypothesisId = "UNINSTALL-E", location = "Plugin.cs:615", message = "CRITICAL ERROR in Dispose", data = new { error = ex.Message, stackTrace = ex.StackTrace, errorType = ex.GetType().FullName }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
                 var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson);
+                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
                 _logger?.LogError("[MR] [DEBUG-UNINSTALL-E] CRITICAL ERROR in Dispose: {Error}", ex.Message);
             }
             catch { }
