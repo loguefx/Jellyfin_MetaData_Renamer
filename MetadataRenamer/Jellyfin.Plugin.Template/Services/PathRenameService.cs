@@ -262,7 +262,8 @@ public class PathRenameService
     /// <param name="desiredFileName">The desired file name (without extension).</param>
     /// <param name="fileExtension">The file extension (including the dot).</param>
     /// <param name="dryRun">Whether to perform a dry run (log only, no actual rename).</param>
-    public void TryRenameEpisodeFile(Episode episode, string desiredFileName, string fileExtension, bool dryRun)
+    /// <param name="overridePath">Optional path to use instead of episode.Path (useful when file was moved).</param>
+    public void TryRenameEpisodeFile(Episode episode, string desiredFileName, string fileExtension, bool dryRun, string overridePath = null)
     {
         string currentPath = string.Empty;
         string newFullPath = string.Empty;
@@ -274,7 +275,11 @@ public class PathRenameService
             _logger.LogInformation("[MR] Desired File Name: {Desired}{Extension}", desiredFileName, fileExtension);
             _logger.LogInformation("[MR] Dry Run: {DryRun}", dryRun);
 
-            currentPath = episode.Path;
+            currentPath = overridePath ?? episode.Path;
+            if (!string.IsNullOrWhiteSpace(overridePath))
+            {
+                _logger.LogInformation("[MR] Using override path (file was moved): {Path}", overridePath);
+            }
             if (string.IsNullOrWhiteSpace(currentPath))
             {
                 _logger.LogWarning("[MR] SKIP: Episode.Path is null or empty");

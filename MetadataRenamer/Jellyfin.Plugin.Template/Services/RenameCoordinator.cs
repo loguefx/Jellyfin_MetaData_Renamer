@@ -658,7 +658,8 @@ public class RenameCoordinator
                 string.IsNullOrWhiteSpace(episodeTitle) ? "(no title)" : episodeTitle);
             _logger.LogInformation("[MR] Dry Run Mode: {DryRun}", cfg.DryRun);
 
-            _pathRenamer.TryRenameEpisodeFile(episode, desiredFileName, fileExtension, cfg.DryRun);
+            // Pass the updated path if file was moved to Season 1 folder
+            _pathRenamer.TryRenameEpisodeFile(episode, desiredFileName, fileExtension, cfg.DryRun, path);
 
             _logger.LogInformation("[MR] ===== Episode Processing Complete =====");
         }
