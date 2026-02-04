@@ -57,15 +57,92 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
             var pluginsPath = applicationPaths?.PluginsPath ?? "UNKNOWN";
             var pluginVersion = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "1.0.0.0";
             var versionedPluginPath = System.IO.Path.Combine(pluginsPath, $"{Name}_{pluginVersion}");
-            var deleteMarkerPath = System.IO.Path.Combine(versionedPluginPath, ".deleteOnStartup");
+            var nonVersionedPluginPath = System.IO.Path.Combine(pluginsPath, Name);
             
-            // Also check parent directory for delete marker (Jellyfin may place it there)
-            var parentDeleteMarker = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(versionedPluginPath) ?? pluginsPath, ".deleteOnStartup");
+            // Check for delete marker in multiple locations (Jellyfin may place it in different places)
+            var deleteMarkerPaths = new List<string>
+            {
+                System.IO.Path.Combine(versionedPluginPath, ".deleteOnStartup"),           // Versioned folder
+                System.IO.Path.Combine(nonVersionedPluginPath, ".deleteOnStartup"),       // Non-versioned folder
+                System.IO.Path.Combine(pluginsPath, ".deleteOnStartup"),                  // Plugins root
+                System.IO.Path.Combine(System.IO.Path.GetDirectoryName(versionedPluginPath) ?? pluginsPath, ".deleteOnStartup")  // Parent of versioned folder
+            };
             
-            if (System.IO.File.Exists(deleteMarkerPath) || System.IO.File.Exists(parentDeleteMarker))
+            // Also check for case variations (Windows is case-insensitive, but be thorough)
+            var deleteMarkerVariations = new List<string>();
+            foreach (var basePath in new[] { versionedPluginPath, nonVersionedPluginPath, pluginsPath })
+            {
+                if (!string.IsNullOrWhiteSpace(basePath))
+                {
+                    deleteMarkerVariations.Add(System.IO.Path.Combine(basePath, ".deleteOnStartup"));
+                    deleteMarkerVariations.Add(System.IO.Path.Combine(basePath, ".DELETEONSTARTUP"));
+                    deleteMarkerVariations.Add(System.IO.Path.Combine(basePath, ".DeleteOnStartup"));
+                }
+            }
+            
+            // Log all paths we're checking
+            _logger.LogInformation("[MR] === Delete Marker Detection Check ===");
+            _logger.LogInformation("[MR] Plugins Path: {Path}", pluginsPath);
+            _logger.LogInformation("[MR] Versioned Plugin Path: {Path}", versionedPluginPath);
+            _logger.LogInformation("[MR] Non-Versioned Plugin Path: {Path}", nonVersionedPluginPath);
+            _logger.LogInformation("[MR] Plugin Version: {Version}", pluginVersion);
+            
+            // Check if plugin folders exist
+            _logger.LogInformation("[MR] Versioned Folder Exists: {Exists}", System.IO.Directory.Exists(versionedPluginPath));
+            _logger.LogInformation("[MR] Non-Versioned Folder Exists: {Exists}", System.IO.Directory.Exists(nonVersionedPluginPath));
+            
+            // List all files in versioned folder if it exists (to see what's actually there)
+            if (System.IO.Directory.Exists(versionedPluginPath))
+            {
+                try
+                {
+                    var files = System.IO.Directory.GetFiles(versionedPluginPath, "*", System.IO.SearchOption.AllDirectories);
+                    _logger.LogInformation("[MR] Files in versioned folder ({Count}): {Files}", 
+                        files.Length, 
+                        string.Join(", ", files.Select(f => System.IO.Path.GetFileName(f))));
+                    
+                    // Check for any file containing "delete" in the name (case-insensitive)
+                    var deleteRelatedFiles = files.Where(f => 
+                        System.IO.Path.GetFileName(f).Contains("delete", StringComparison.OrdinalIgnoreCase)).ToList();
+                    if (deleteRelatedFiles.Any())
+                    {
+                        _logger.LogWarning("[MR] ⚠️ Found files with 'delete' in name: {Files}", 
+                            string.Join(", ", deleteRelatedFiles.Select(f => System.IO.Path.GetFileName(f))));
+                    }
+                }
+                catch (Exception listEx)
+                {
+                    _logger.LogWarning(listEx, "[MR] Could not list files in versioned folder: {Message}", listEx.Message);
+                }
+            }
+            
+            // Check all marker paths
+            string? foundMarkerPath = null;
+            foreach (var markerPath in deleteMarkerPaths.Concat(deleteMarkerVariations).Distinct())
+            {
+                try
+                {
+                    if (System.IO.File.Exists(markerPath))
+                    {
+                        foundMarkerPath = markerPath;
+                        _logger.LogWarning("[MR] ⚠️ DELETE MARKER FOUND at: {Path}", markerPath);
+                        break;
+                    }
+                    else
+                    {
+                        _logger.LogInformation("[MR] Delete marker NOT found at: {Path}", markerPath);
+                    }
+                }
+                catch (Exception checkEx)
+                {
+                    _logger.LogWarning(checkEx, "[MR] Error checking delete marker at {Path}: {Message}", markerPath, checkEx.Message);
+                }
+            }
+            
+            if (foundMarkerPath != null)
             {
                 _logger.LogWarning("[MR] ⚠️ DELETE MARKER DETECTED - Plugin marked for deletion. Throwing exception to prevent loading.");
-                _logger.LogWarning("[MR] Delete marker path: {Path}", System.IO.File.Exists(deleteMarkerPath) ? deleteMarkerPath : parentDeleteMarker);
+                _logger.LogWarning("[MR] Delete marker path: {Path}", foundMarkerPath);
                 _logger.LogWarning("[MR] This allows Jellyfin to delete the plugin folder without loading the DLL.");
                 
                 // Throw exception to prevent plugin from loading
@@ -73,8 +150,10 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
                 throw new InvalidOperationException(
                     $"Plugin is marked for deletion (deleteOnStartup marker found). " +
                     $"This prevents the plugin from loading, allowing Jellyfin to delete the folder. " +
-                    $"Marker path: {(System.IO.File.Exists(deleteMarkerPath) ? deleteMarkerPath : parentDeleteMarker)}");
+                    $"Marker path: {foundMarkerPath}");
             }
+            
+            _logger.LogInformation("[MR] ✓ No delete marker found - plugin will load normally");
             
             Instance = this;
             _libraryManager = libraryManager;
