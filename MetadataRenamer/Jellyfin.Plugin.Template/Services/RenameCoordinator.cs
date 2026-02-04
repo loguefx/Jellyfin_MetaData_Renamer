@@ -123,6 +123,20 @@ public class RenameCoordinator
             // Handle Episode items
             if (e.Item is Episode episode)
             {
+                // #region agent log - Hypothesis A: Check episode state immediately after cast
+                try
+                {
+                    var indexNumberImmediate = episode.IndexNumber;
+                    var parentIndexNumberImmediate = episode.ParentIndexNumber;
+                    var episodeTypeImmediate = episode.GetType().FullName;
+                    System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "A", location = "RenameCoordinator.cs:124", message = "Episode cast successful - immediate IndexNumber check", data = new { episodeType = episodeTypeImmediate, indexNumber = indexNumberImmediate?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", parentIndexNumber = parentIndexNumberImmediate?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", episodeId = episode.Id.ToString(), episodeName = episode.Name ?? "NULL" }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
+                }
+                catch (Exception ex)
+                {
+                    System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "A", location = "RenameCoordinator.cs:124", message = "ERROR checking IndexNumber immediately after cast", data = new { error = ex.Message, episodeId = episode?.Id.ToString() ?? "NULL" }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
+                }
+                // #endregion
+                
                 if (!cfg.RenameEpisodeFiles)
                 {
                     _logger.LogInformation("[MR] SKIP: RenameEpisodeFiles is disabled in configuration");
@@ -436,7 +450,54 @@ public class RenameCoordinator
     {
         try
         {
+            // #region agent log
+            try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "A", location = "RenameCoordinator.cs:439", message = "HandleEpisodeUpdate entry", data = new { episodeId = episode.Id.ToString(), episodeName = episode.Name ?? "NULL", episodePath = episode.Path ?? "NULL", episodeType = episode.GetType().FullName }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+            // #endregion
+            
             _logger.LogInformation("[MR] Processing Episode: Name={Name}, Id={Id}, Path={Path}", episode.Name, episode.Id, episode.Path);
+            
+            // #region agent log - Hypothesis A: Property access timing
+            try
+            {
+                var indexNumberValue = episode.IndexNumber;
+                var parentIndexNumberValue = episode.ParentIndexNumber;
+                System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "A", location = "RenameCoordinator.cs:445", message = "Episode IndexNumber accessed immediately", data = new { indexNumber = indexNumberValue?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", parentIndexNumber = parentIndexNumberValue?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", episodeId = episode.Id.ToString() }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
+            }
+            catch (Exception ex)
+            {
+                System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "A", location = "RenameCoordinator.cs:445", message = "ERROR accessing IndexNumber", data = new { error = ex.Message, episodeId = episode.Id.ToString() }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
+            }
+            // #endregion
+            
+            // #region agent log - Hypothesis B: Episode object state (reflection)
+            try
+            {
+                var episodeType = episode.GetType();
+                var properties = episodeType.GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                var relevantProps = new Dictionary<string, object>();
+                foreach (var prop in properties)
+                {
+                    if (prop.Name.Contains("Index", StringComparison.OrdinalIgnoreCase) || 
+                        prop.Name.Contains("Number", StringComparison.OrdinalIgnoreCase) ||
+                        prop.Name.Contains("Season", StringComparison.OrdinalIgnoreCase) ||
+                        prop.Name.Contains("Episode", StringComparison.OrdinalIgnoreCase) ||
+                        prop.Name == "Name" || prop.Name == "SeriesName")
+                    {
+                        try
+                        {
+                            var value = prop.GetValue(episode);
+                            relevantProps[prop.Name] = value?.ToString() ?? "NULL";
+                        }
+                        catch { relevantProps[prop.Name] = "ERROR"; }
+                    }
+                }
+                System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "B", location = "RenameCoordinator.cs:465", message = "Episode object properties via reflection", data = new { episodeType = episodeType.FullName, properties = relevantProps, episodeId = episode.Id.ToString() }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
+            }
+            catch (Exception ex)
+            {
+                System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "B", location = "RenameCoordinator.cs:465", message = "ERROR in reflection", data = new { error = ex.Message, episodeId = episode.Id.ToString() }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
+            }
+            // #endregion
 
             // Per-item cooldown
             if (_lastAttemptUtcByItem.TryGetValue(episode.Id, out var lastTry))
@@ -559,8 +620,36 @@ public class RenameCoordinator
                 _logger.LogInformation("[MR] Using Season 1 for renaming (wasInSeriesRootBeforeMove={WasInSeriesRoot}, metadataSeason={MetadataSeason})", 
                     wasInSeriesRootBeforeMove, episode.ParentIndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
             }
+            // #region agent log - Hypothesis C: Check IndexNumber at metadata access point
+            try
+            {
+                var indexNumberBeforeAccess = episode.IndexNumber;
+                var parentIndexNumberBeforeAccess = episode.ParentIndexNumber;
+                System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "C", location = "RenameCoordinator.cs:609", message = "IndexNumber accessed at metadata point", data = new { indexNumber = indexNumberBeforeAccess?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", parentIndexNumber = parentIndexNumberBeforeAccess?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", episodeId = episode.Id.ToString(), episodeName = episode.Name ?? "NULL" }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
+            }
+            catch (Exception ex)
+            {
+                System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "C", location = "RenameCoordinator.cs:609", message = "ERROR accessing IndexNumber at metadata point", data = new { error = ex.Message, episodeId = episode.Id.ToString() }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
+            }
+            // #endregion
+            
             var episodeNumber = episode.IndexNumber; // Episode number from metadata
             var seriesName = episode.SeriesName?.Trim() ?? string.Empty;
+            
+            // #region agent log - Hypothesis D: Check Series object state
+            try
+            {
+                var seriesObj = episode.Series;
+                var seriesType = seriesObj?.GetType().FullName ?? "NULL";
+                var seriesId = seriesObj?.Id.ToString() ?? "NULL";
+                var seriesNameFromObj = seriesObj?.Name ?? "NULL";
+                System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "D", location = "RenameCoordinator.cs:625", message = "Episode.Series object state", data = new { seriesType = seriesType, seriesId = seriesId, seriesName = seriesNameFromObj, episodeId = episode.Id.ToString() }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
+            }
+            catch (Exception ex)
+            {
+                System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "D", location = "RenameCoordinator.cs:625", message = "ERROR accessing Series object", data = new { error = ex.Message, episodeId = episode.Id.ToString() }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
+            }
+            // #endregion
             
             _logger.LogInformation("[MR] === Episode Metadata Debug ===");
             _logger.LogInformation("[MR] episode.IndexNumber (raw): {IndexNumber}", episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
@@ -593,6 +682,42 @@ public class RenameCoordinator
             _logger.LogInformation("[MR] Current Filename: {Current}", currentFileName);
             _logger.LogInformation("[MR] In Series Root (flat structure): {InSeriesRoot}", isInSeriesRoot);
 
+            // #region agent log - Hypothesis E: IndexNumber is NULL - log full episode state
+            if (!episodeNumber.HasValue)
+            {
+                try
+                {
+                    var episodeType = episode.GetType();
+                    var allProps = new Dictionary<string, object>();
+                    foreach (var prop in episodeType.GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
+                    {
+                        try
+                        {
+                            var val = prop.GetValue(episode);
+                            if (val != null && (prop.PropertyType.IsPrimitive || prop.PropertyType == typeof(string) || prop.PropertyType == typeof(Guid)))
+                            {
+                                allProps[prop.Name] = val.ToString();
+                            }
+                            else if (val == null)
+                            {
+                                allProps[prop.Name] = "NULL";
+                            }
+                            else
+                            {
+                                allProps[prop.Name] = val.GetType().Name;
+                            }
+                        }
+                        catch { allProps[prop.Name] = "ERROR"; }
+                    }
+                    System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "E", location = "RenameCoordinator.cs:640", message = "IndexNumber is NULL - full episode state", data = new { episodeType = episodeType.FullName, episodeId = episode.Id.ToString(), allProperties = allProps }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
+                }
+                catch (Exception ex)
+                {
+                    System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "E", location = "RenameCoordinator.cs:640", message = "ERROR getting full episode state", data = new { error = ex.Message, episodeId = episode.Id.ToString() }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
+                }
+            }
+            // #endregion
+            
             // Episode number is REQUIRED - try to get it from metadata first, then fall back to filename parsing
             if (!episodeNumber.HasValue)
             {
