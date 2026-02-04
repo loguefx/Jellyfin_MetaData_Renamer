@@ -72,8 +72,8 @@ public class RenameCoordinator
             _logger.LogInformation("[MR] Item Name: {Name}", e.Item?.Name ?? "NULL");
             _logger.LogInformation("[MR] Item ID: {Id}", e.Item?.Id.ToString() ?? "NULL");
             _logger.LogInformation(
-                "[MR] Configuration: Enabled={Enabled}, RenameSeriesFolders={RenameSeriesFolders}, RenameSeasonFolders={RenameSeasonFolders}, RenameEpisodeFiles={RenameEpisodeFiles}, DryRun={DryRun}, RequireProviderIdMatch={RequireProviderIdMatch}, OnlyRenameWhenProviderIdsChange={OnlyRenameWhenProviderIdsChange}",
-                cfg.Enabled, cfg.RenameSeriesFolders, cfg.RenameSeasonFolders, cfg.RenameEpisodeFiles, cfg.DryRun, cfg.RequireProviderIdMatch, cfg.OnlyRenameWhenProviderIdsChange);
+                "[MR] Configuration: Enabled={Enabled}, RenameSeriesFolders={RenameSeriesFolders}, RenameSeasonFolders={RenameSeasonFolders}, RenameEpisodeFiles={RenameEpisodeFiles}, DryRun={DryRun}, RequireProviderIdMatch={RequireProviderIdMatch}, OnlyRenameWhenProviderIdsChange={OnlyRenameWhenProviderIdsChange}, ProcessDuringLibraryScans={ProcessDuringLibraryScans}",
+                cfg.Enabled, cfg.RenameSeriesFolders, cfg.RenameSeasonFolders, cfg.RenameEpisodeFiles, cfg.DryRun, cfg.RequireProviderIdMatch, cfg.OnlyRenameWhenProviderIdsChange, cfg.ProcessDuringLibraryScans);
 
             if (!cfg.Enabled)
             {
@@ -84,21 +84,21 @@ public class RenameCoordinator
             return;
         }
 
-        // Debounce global spam
         var now = DateTime.UtcNow;
-            var timeSinceLastAction = now - _lastGlobalActionUtc;
-            if (timeSinceLastAction < _globalMinInterval)
-        {
-                _logger.LogInformation("[MR] SKIP: Global debounce active. Time since last action: {Seconds} seconds (min: {MinSeconds})",
-                    timeSinceLastAction.TotalSeconds, _globalMinInterval.TotalSeconds);
-            return;
-        }
-
-        _lastGlobalActionUtc = now;
 
             // Handle Series items
             if (e.Item is Series series)
             {
+                // Debounce global spam for Series items only
+                var timeSinceLastAction = now - _lastGlobalActionUtc;
+                if (timeSinceLastAction < _globalMinInterval)
+                {
+                    _logger.LogInformation("[MR] SKIP: Global debounce active. Time since last action: {Seconds} seconds (min: {MinSeconds})",
+                        timeSinceLastAction.TotalSeconds, _globalMinInterval.TotalSeconds);
+                    return;
+                }
+                _lastGlobalActionUtc = now;
+
                 if (!cfg.RenameSeriesFolders)
                 {
                     _logger.LogInformation("[MR] SKIP: RenameSeriesFolders is disabled in configuration");
@@ -111,6 +111,16 @@ public class RenameCoordinator
             // Handle Season items
             if (e.Item is Season season)
             {
+                // Debounce global spam for Season items only
+                var timeSinceLastAction = now - _lastGlobalActionUtc;
+                if (timeSinceLastAction < _globalMinInterval)
+                {
+                    _logger.LogInformation("[MR] SKIP: Global debounce active. Time since last action: {Seconds} seconds (min: {MinSeconds})",
+                        timeSinceLastAction.TotalSeconds, _globalMinInterval.TotalSeconds);
+                    return;
+                }
+                _lastGlobalActionUtc = now;
+
                 if (!cfg.RenameSeasonFolders)
                 {
                     _logger.LogInformation("[MR] SKIP: RenameSeasonFolders is disabled in configuration");
@@ -123,6 +133,21 @@ public class RenameCoordinator
             // Handle Episode items
             if (e.Item is Episode episode)
             {
+                // #region agent log - MULTI-EPISODE-HYP-A: Track all episode ItemUpdated events
+                try
+                {
+                    var logData = new { sessionId = "debug-session", runId = "run1", hypothesisId = "MULTI-EP-A", location = "RenameCoordinator.cs:124", message = "Episode ItemUpdated event received", data = new { episodeId = episode.Id.ToString(), episodeName = episode.Name ?? "NULL", episodePath = episode.Path ?? "NULL", episodeIndexNumber = episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", parentIndexNumber = episode.ParentIndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", seriesName = episode.Series?.Name ?? "NULL", seriesPath = episode.Series?.Path ?? "NULL" }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
+                    var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                    try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+                    _logger.LogInformation("[MR] [MULTI-EP-A] Episode ItemUpdated event: EpisodeId={Id}, Name={Name}, Path={Path}, IndexNumber={IndexNumber}", 
+                        episode.Id, episode.Name ?? "NULL", episode.Path ?? "NULL", episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+                }
+                catch (Exception ex)
+                {
+                    try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "MULTI-EP-A", location = "RenameCoordinator.cs:124", message = "ERROR logging episode event", data = new { error = ex.Message }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+                }
+                // #endregion
+                
                 // #region agent log - Hypothesis A: Check episode state immediately after cast
                 try
                 {
@@ -131,7 +156,7 @@ public class RenameCoordinator
                     var episodeTypeImmediate = episode.GetType().FullName;
                     var logData = new { sessionId = "debug-session", runId = "run1", hypothesisId = "A", location = "RenameCoordinator.cs:124", message = "Episode cast successful - immediate IndexNumber check", data = new { episodeType = episodeTypeImmediate, indexNumber = indexNumberImmediate?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", parentIndexNumber = parentIndexNumberImmediate?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", episodeId = episode.Id.ToString(), episodeName = episode.Name ?? "NULL" }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
                     var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                    System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson);
+                    try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
                     _logger.LogInformation("[MR] [DEBUG-HYP-A] Episode cast: Type={Type}, IndexNumber={IndexNumber}, ParentIndexNumber={ParentIndexNumber}, Id={Id}, Name={Name}", 
                         episodeTypeImmediate, indexNumberImmediate?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", 
                         parentIndexNumberImmediate?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", episode.Id, episode.Name ?? "NULL");
@@ -140,13 +165,16 @@ public class RenameCoordinator
                 {
                     var logData = new { sessionId = "debug-session", runId = "run1", hypothesisId = "A", location = "RenameCoordinator.cs:124", message = "ERROR checking IndexNumber immediately after cast", data = new { error = ex.Message, episodeId = episode?.Id.ToString() ?? "NULL" }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
                     var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                    System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson);
+                    try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
                     _logger.LogError(ex, "[MR] [DEBUG-HYP-A] ERROR checking IndexNumber immediately after cast: {Error}", ex.Message);
                 }
                 // #endregion
                 
                 if (!cfg.RenameEpisodeFiles)
                 {
+                    // #region agent log - MULTI-EPISODE-HYP-B: Track episodes skipped due to config
+                    try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "MULTI-EP-B", location = "RenameCoordinator.cs:148", message = "Episode skipped - RenameEpisodeFiles disabled", data = new { episodeId = episode.Id.ToString(), episodeName = episode.Name ?? "NULL" }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+                    // #endregion
                     _logger.LogInformation("[MR] SKIP: RenameEpisodeFiles is disabled in configuration");
                     return;
                 }
@@ -250,47 +278,82 @@ public class RenameCoordinator
             
             // Year is now optional - we'll handle it in the format rendering
 
-            // Identify inference: only rename when provider ids changed
+            // Check if we should process during library scans
+            // Logic:
+            // - If ProcessDuringLibraryScans is false: Only process when provider IDs change (Identify flow)
+            // - If ProcessDuringLibraryScans is true: Process during library scans regardless of provider ID changes
+            // - The "Identify" flow (provider IDs change) always works regardless of ProcessDuringLibraryScans
+            var hasProviderIds = series.ProviderIds != null && series.ProviderIds.Count > 0;
+            var newHash = hasProviderIds && series.ProviderIds != null
+                ? ProviderIdHelper.ComputeProviderHash(series.ProviderIds)
+                : string.Empty;
+            
+            var hasOldHash = _providerHashByItem.TryGetValue(series.Id, out var oldHash);
+            var providerIdsChanged = hasOldHash && !string.Equals(newHash, oldHash, StringComparison.Ordinal);
+            var isFirstTime = !hasOldHash;
+
+            // #region agent log
+            try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "B", location = "RenameCoordinator.cs:124", message = "Provider hash check", data = new { oldHash = oldHash ?? "(none)", newHash = newHash, hasOldHash = hasOldHash, hasProviderIds = hasProviderIds, seriesName = name, providerIds = series.ProviderIds != null ? string.Join(",", series.ProviderIds.Select(kv => $"{kv.Key}={kv.Value}")) : "null", processDuringLibraryScans = cfg.ProcessDuringLibraryScans, onlyRenameWhenProviderIdsChange = cfg.OnlyRenameWhenProviderIdsChange, providerIdsChanged = providerIdsChanged, isFirstTime = isFirstTime }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+            // #endregion
+
+            _logger.LogInformation("[MR] === Provider Hash Check ===");
+            _logger.LogInformation("[MR] ProcessDuringLibraryScans: {ProcessDuringLibraryScans}", cfg.ProcessDuringLibraryScans);
+            _logger.LogInformation("[MR] OnlyRenameWhenProviderIdsChange: {OnlyRenameWhenProviderIdsChange}", cfg.OnlyRenameWhenProviderIdsChange);
+            _logger.LogInformation("[MR] Has Provider IDs: {HasProviderIds}", hasProviderIds);
+            _logger.LogInformation("[MR] Old Hash Exists: {HasOldHash}, Value: {OldHash}", hasOldHash, oldHash ?? "(none)");
+            _logger.LogInformation("[MR] New Hash: {NewHash}", newHash);
+            _logger.LogInformation("[MR] Provider IDs Changed: {Changed}, First Time: {FirstTime}", providerIdsChanged, isFirstTime);
+            _logger.LogInformation("[MR] Series: {Name}", name);
+
+            // Determine if we should proceed with rename
+            bool shouldProceed = false;
+            string proceedReason = string.Empty;
+
             if (cfg.OnlyRenameWhenProviderIdsChange)
             {
-                var hasProviderIds = series.ProviderIds != null && series.ProviderIds.Count > 0;
-                var newHash = hasProviderIds && series.ProviderIds != null
-                    ? ProviderIdHelper.ComputeProviderHash(series.ProviderIds)
-                    : string.Empty;
-                
-                var hasOldHash = _providerHashByItem.TryGetValue(series.Id, out var oldHash);
-
-                // #region agent log
-                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "B", location = "RenameCoordinator.cs:124", message = "Provider hash check", data = new { oldHash = oldHash ?? "(none)", newHash = newHash, hasOldHash = hasOldHash, hasProviderIds = hasProviderIds, seriesName = name, providerIds = series.ProviderIds != null ? string.Join(",", series.ProviderIds.Select(kv => $"{kv.Key}={kv.Value}")) : "null" }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
-                // #endregion
-
-                _logger.LogInformation("[MR] === Provider Hash Check ===");
-                _logger.LogInformation("[MR] Has Provider IDs: {HasProviderIds}", hasProviderIds);
-                _logger.LogInformation("[MR] Old Hash Exists: {HasOldHash}, Value: {OldHash}", hasOldHash, oldHash ?? "(none)");
-                _logger.LogInformation("[MR] New Hash: {NewHash}", newHash);
-                _logger.LogInformation("[MR] Series: {Name}", name);
-
-                // If we have an old hash and it matches the new hash, skip (no change)
-                if (hasOldHash && string.Equals(newHash, oldHash, StringComparison.Ordinal))
+                // OnlyRenameWhenProviderIdsChange is enabled
+                if (providerIdsChanged || isFirstTime)
                 {
-                    // #region agent log
-                    try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "B", location = "RenameCoordinator.cs:138", message = "SKIP: ProviderIds unchanged", data = new { seriesName = name, hash = newHash }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
-                    // #endregion
-                    _logger.LogWarning("[MR] SKIP: Provider IDs unchanged. OnlyRenameWhenProviderIdsChange is enabled. Name={Name}, Hash={Hash}", name, newHash);
-                    _logger.LogInformation("[MR] ===== Processing Complete (Skipped) =====");
-                    return;
+                    // Provider IDs changed or first time - always proceed (Identify flow)
+                    shouldProceed = true;
+                    proceedReason = providerIdsChanged ? "Provider IDs changed (Identify flow)" : "First time processing";
                 }
-
-                // Allow rename if:
-                // 1. No old hash exists (first time processing this series)
-                // 2. Hash changed (provider IDs changed)
-                _logger.LogInformation("[MR] ✓ Provider IDs changed or first time processing. Allowing rename.");
-                _logger.LogInformation("[MR] Old Hash: {OldHash}, New Hash: {NewHash}", oldHash ?? "(none)", newHash);
-                _providerHashByItem[series.Id] = newHash;
+                else if (cfg.ProcessDuringLibraryScans)
+                {
+                    // Provider IDs unchanged, but ProcessDuringLibraryScans is enabled - proceed during library scan
+                    shouldProceed = true;
+                    proceedReason = "ProcessDuringLibraryScans enabled (library scan)";
+                }
+                else
+                {
+                    // Provider IDs unchanged and ProcessDuringLibraryScans is disabled - skip
+                    shouldProceed = false;
+                    proceedReason = "Provider IDs unchanged and ProcessDuringLibraryScans disabled";
+                }
             }
             else
             {
-                _logger.LogInformation("[MR] OnlyRenameWhenProviderIdsChange is disabled - proceeding with rename");
+                // OnlyRenameWhenProviderIdsChange is disabled - always proceed
+                shouldProceed = true;
+                proceedReason = "OnlyRenameWhenProviderIdsChange disabled";
+            }
+
+            if (!shouldProceed)
+            {
+                // #region agent log
+                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "B", location = "RenameCoordinator.cs:138", message = "SKIP: ProviderIds unchanged", data = new { seriesName = name, hash = newHash, reason = proceedReason }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+                // #endregion
+                _logger.LogWarning("[MR] SKIP: {Reason}. Name={Name}, Hash={Hash}", proceedReason, name, newHash);
+                _logger.LogInformation("[MR] ===== Processing Complete (Skipped) =====");
+                return;
+            }
+
+            // Update hash and proceed
+            _logger.LogInformation("[MR] ✓ Proceeding with rename. Reason: {Reason}", proceedReason);
+            _logger.LogInformation("[MR] Old Hash: {OldHash}, New Hash: {NewHash}", oldHash ?? "(none)", newHash);
+            if (hasProviderIds && series.ProviderIds != null)
+            {
+                _providerHashByItem[series.Id] = newHash;
             }
 
             // Handle provider IDs - use if available, otherwise use empty values
@@ -354,9 +417,114 @@ public class RenameCoordinator
             try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "D", location = "RenameCoordinator.cs:186", message = "Attempting rename", data = new { seriesName = name, currentPath = path, desiredFolderName = desiredFolderName, dryRun = cfg.DryRun }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
             // #endregion
 
-            _pathRenamer.TryRenameSeriesFolder(series, desiredFolderName, cfg.DryRun);
+            var renameSuccessful = _pathRenamer.TryRenameSeriesFolder(series, desiredFolderName, cfg.DryRun);
+
+            // After successful series rename, scan for episodes in the series root and process them
+            if (renameSuccessful && cfg.RenameEpisodeFiles && !cfg.DryRun)
+            {
+                _logger.LogInformation("[MR] === Scanning for episodes in series root after rename ===");
+                // Calculate the new path (series.Path is still the old path after rename)
+                var parentDirectory = Path.GetDirectoryName(path);
+                var newSeriesPath = Path.Combine(parentDirectory, desiredFolderName);
+                _logger.LogInformation("[MR] Using new series path for episode processing: {NewPath}", newSeriesPath);
+                ProcessEpisodesInSeriesRoot(newSeriesPath, cfg, now);
+            }
 
             _logger.LogInformation("[MR] ===== Processing Complete =====");
+    }
+
+    /// <summary>
+    /// Scans the series folder for episode files in the root and moves them to "Season 01".
+    /// This is called after a successful series folder rename to ensure episodes are properly organized.
+    /// Only processes episodes if they are in the series root AND no season folders already exist.
+    /// </summary>
+    private void ProcessEpisodesInSeriesRoot(string seriesPath, PluginConfiguration cfg, DateTime now)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(seriesPath) || !Directory.Exists(seriesPath))
+            {
+                _logger.LogWarning("[MR] SKIP: Cannot process episodes - series path invalid or does not exist. Path: {Path}", seriesPath);
+                return;
+            }
+
+            _logger.LogInformation("[MR] Scanning series folder for episode files: {Path}", seriesPath);
+
+            // Check if season folders already exist (don't interfere with existing structure)
+            var seasonPattern = new System.Text.RegularExpressions.Regex(
+                @"^(Season\s*\d+|S\d+|Season\s*\d{2,})$",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+            var subdirectories = Directory.GetDirectories(seriesPath);
+            var hasSeasonFolders = subdirectories.Any(dir =>
+            {
+                var dirName = Path.GetFileName(dir);
+                return seasonPattern.IsMatch(dirName);
+            });
+
+            if (hasSeasonFolders)
+            {
+                _logger.LogInformation("[MR] Series already has season folders. Skipping episode organization - episodes are already structured correctly.");
+                return;
+            }
+
+            // Get all video files in the series root (not in subdirectories)
+            var videoExtensions = new[] { ".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm", ".m4v" };
+            var filesInRoot = Directory.GetFiles(seriesPath, "*.*", SearchOption.TopDirectoryOnly)
+                .Where(f => videoExtensions.Contains(Path.GetExtension(f).ToLowerInvariant()))
+                .ToList();
+
+            if (filesInRoot.Count == 0)
+            {
+                _logger.LogInformation("[MR] No video files found in series root. Episodes may already be in season folders.");
+                return;
+            }
+
+            _logger.LogInformation("[MR] Found {Count} video file(s) in series root (no season folders detected)", filesInRoot.Count);
+
+            // Create "Season 01" folder if needed
+            var season1FolderName = SafeName.RenderSeasonFolder(cfg.SeasonFolderFormat, 1, null);
+            var season1FolderPath = Path.Combine(seriesPath, season1FolderName);
+
+            if (!Directory.Exists(season1FolderPath))
+            {
+                Directory.CreateDirectory(season1FolderPath);
+                _logger.LogInformation("[MR] ✓ Created Season 1 folder: {Path}", season1FolderPath);
+            }
+            else
+            {
+                _logger.LogInformation("[MR] Season 1 folder already exists: {Path}", season1FolderPath);
+            }
+
+            // Move each file to "Season 01"
+            foreach (var filePath in filesInRoot)
+            {
+                var fileName = Path.GetFileName(filePath);
+                var newFilePath = Path.Combine(season1FolderPath, fileName);
+
+                if (File.Exists(newFilePath))
+                {
+                    _logger.LogWarning("[MR] SKIP: Target file already exists in Season 1 folder. File: {FileName}", fileName);
+                    continue;
+                }
+
+                try
+                {
+                    File.Move(filePath, newFilePath);
+                    _logger.LogInformation("[MR] ✓ Moved episode file to Season 1 folder: {FileName}", fileName);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[MR] ERROR: Failed to move episode file. File: {FileName}, Error: {Error}", fileName, ex.Message);
+                }
+            }
+
+            _logger.LogInformation("[MR] === Finished processing episodes in series root ===");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[MR] ERROR in ProcessEpisodesInSeriesRoot: {Message}", ex.Message);
+        }
     }
 
     /// <summary>
@@ -471,7 +639,7 @@ public class RenameCoordinator
                 var parentIndexNumberValue = episode.ParentIndexNumber;
                 var logData = new { sessionId = "debug-session", runId = "run1", hypothesisId = "A", location = "RenameCoordinator.cs:445", message = "Episode IndexNumber accessed immediately", data = new { indexNumber = indexNumberValue?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", parentIndexNumber = parentIndexNumberValue?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", episodeId = episode.Id.ToString() }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
                 var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson);
+                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
                 _logger.LogInformation("[MR] [DEBUG-HYP-A] IndexNumber accessed in HandleEpisodeUpdate: IndexNumber={IndexNumber}, ParentIndexNumber={ParentIndexNumber}, EpisodeId={Id}", 
                     indexNumberValue?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", 
                     parentIndexNumberValue?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", episode.Id);
@@ -480,7 +648,7 @@ public class RenameCoordinator
             {
                 var logData = new { sessionId = "debug-session", runId = "run1", hypothesisId = "A", location = "RenameCoordinator.cs:445", message = "ERROR accessing IndexNumber", data = new { error = ex.Message, episodeId = episode.Id.ToString() }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
                 var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson);
+                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
                 _logger.LogError(ex, "[MR] [DEBUG-HYP-A] ERROR accessing IndexNumber: {Error}", ex.Message);
             }
             // #endregion
@@ -509,14 +677,14 @@ public class RenameCoordinator
                 }
                 var logData = new { sessionId = "debug-session", runId = "run1", hypothesisId = "B", location = "RenameCoordinator.cs:465", message = "Episode object properties via reflection", data = new { episodeType = episodeType.FullName, properties = relevantProps, episodeId = episode.Id.ToString() }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
                 var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson);
+                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
                 _logger.LogInformation("[MR] [DEBUG-HYP-B] Episode type: {Type}, Relevant properties: {Properties}", episodeType.FullName, string.Join(", ", relevantProps.Select(kvp => $"{kvp.Key}={kvp.Value}")));
             }
             catch (Exception ex)
             {
                 var logData = new { sessionId = "debug-session", runId = "run1", hypothesisId = "B", location = "RenameCoordinator.cs:465", message = "ERROR in reflection", data = new { error = ex.Message, episodeId = episode.Id.ToString() }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
                 var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson);
+                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
                 _logger.LogError(ex, "[MR] [DEBUG-HYP-B] ERROR in reflection: {Error}", ex.Message);
             }
             // #endregion
@@ -527,6 +695,9 @@ public class RenameCoordinator
                 var timeSinceLastTry = (now - lastTry).TotalSeconds;
                 if (timeSinceLastTry < cfg.PerItemCooldownSeconds)
                 {
+                    // #region agent log - MULTI-EPISODE-HYP-C: Track episodes skipped due to cooldown
+                    try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "MULTI-EP-C", location = "RenameCoordinator.cs:525", message = "Episode skipped - cooldown active", data = new { episodeId = episode.Id.ToString(), episodeName = episode.Name ?? "NULL", timeSinceLastTry = timeSinceLastTry.ToString(System.Globalization.CultureInfo.InvariantCulture), cooldownSeconds = cfg.PerItemCooldownSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture) }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+                    // #endregion
                     _logger.LogInformation(
                         "[MR] SKIP: Cooldown active. EpisodeId={Id}, Name={Name}, Time since last try: {Seconds} seconds (cooldown: {CooldownSeconds})",
                         episode.Id, episode.Name, timeSinceLastTry.ToString(System.Globalization.CultureInfo.InvariantCulture), cfg.PerItemCooldownSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
@@ -539,26 +710,48 @@ public class RenameCoordinator
             var path = episode.Path;
             if (string.IsNullOrWhiteSpace(path))
             {
+                // #region agent log - MULTI-EPISODE-HYP-D: Track episodes skipped due to no path
+                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "MULTI-EP-D", location = "RenameCoordinator.cs:539", message = "Episode skipped - no path", data = new { episodeId = episode.Id.ToString(), episodeName = episode.Name ?? "NULL" }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+                // #endregion
                 _logger.LogWarning("[MR] SKIP: Episode has no path. EpisodeId={Id}, Name={Name}", episode.Id, episode.Name);
                 return;
             }
 
             if (!File.Exists(path))
             {
+                // #region agent log - MULTI-EPISODE-HYP-E: Track episodes skipped due to file not existing
+                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "MULTI-EP-E", location = "RenameCoordinator.cs:546", message = "Episode skipped - file does not exist", data = new { episodeId = episode.Id.ToString(), episodeName = episode.Name ?? "NULL", path = path }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+                // #endregion
                 _logger.LogWarning("[MR] SKIP: Episode file does not exist on disk. Path={Path}, EpisodeId={Id}, Name={Name}", path, episode.Id, episode.Name);
             return;
         }
 
             _logger.LogInformation("[MR] Episode file path verified: {Path}", path);
 
-            // Check if episode is directly in series folder (no season folder)
+            // Derive series path from episode file path (more reliable than episode.Series?.Path which may be stale after rename)
             var episodeDirectory = Path.GetDirectoryName(path);
-            var seriesPath = episode.Series?.Path;
+            var seriesPathFromFile = DeriveSeriesPathFromEpisodePath(path);
+            var seriesPathFromMetadata = episode.Series?.Path;
+            
+            // Use file system path if available, fallback to metadata path
+            var seriesPath = !string.IsNullOrWhiteSpace(seriesPathFromFile) ? seriesPathFromFile : seriesPathFromMetadata;
+            
+            _logger.LogInformation("[MR] Series path from file system: {FromFile}, from metadata: {FromMetadata}, using: {Using}", 
+                seriesPathFromFile ?? "NULL", seriesPathFromMetadata ?? "NULL", seriesPath ?? "NULL");
+            
+            // Check if episode is directly in series folder (no season folder)
             var isInSeriesRoot = !string.IsNullOrWhiteSpace(seriesPath) && 
                                  !string.IsNullOrWhiteSpace(episodeDirectory) &&
                                  string.Equals(episodeDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), 
                                              seriesPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), 
                                              StringComparison.OrdinalIgnoreCase);
+            
+            // #region agent log - MULTI-EPISODE-HYP-F: Track isInSeriesRoot detection for each episode
+            try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "MULTI-EP-F", location = "RenameCoordinator.cs:557", message = "isInSeriesRoot check", data = new { episodeId = episode.Id.ToString(), episodeName = episode.Name ?? "NULL", episodePath = path, episodeDirectory = episodeDirectory ?? "NULL", seriesPath = seriesPath ?? "NULL", isInSeriesRoot = isInSeriesRoot }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+            // #endregion
+            
+            // Remember if we were in series root BEFORE moving (capture before isInSeriesRoot is modified)
+            var wasInSeriesRootBeforeMove = isInSeriesRoot;
             
             if (isInSeriesRoot)
             {
@@ -607,6 +800,9 @@ public class RenameCoordinator
                     else
                     {
                         File.Move(path, newEpisodePath);
+                        // #region agent log - MULTI-EPISODE-HYP-G: Track successful episode moves
+                        try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "MULTI-EP-G", location = "RenameCoordinator.cs:612", message = "Episode moved to Season 1 folder", data = new { episodeId = episode.Id.ToString(), episodeName = episode.Name ?? "NULL", fromPath = path, toPath = newEpisodePath }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+                        // #endregion
                         _logger.LogInformation("[MR] ✓ Moved episode file to Season 1 folder");
                         _logger.LogInformation("[MR] From: {From}", path);
                         _logger.LogInformation("[MR] To: {To}", newEpisodePath);
@@ -629,18 +825,30 @@ public class RenameCoordinator
 
             // Get episode metadata - ALL VALUES FROM METADATA, NOT FROM FILENAME
             var episodeTitle = episode.Name?.Trim() ?? string.Empty;
+            
             // Determine season number:
             // - If episode was in series root (flat structure), we created Season 1 folder, so use season 1
-            // - Otherwise, use metadata season number, defaulting to 1 if null
+            // - If episode is already in a season folder, use the actual season number from metadata
+            // - Default to 1 if season number is null
             int? seasonNumber = episode.ParentIndexNumber;
-            // Remember if we were in series root BEFORE moving (capture before isInSeriesRoot is set to false)
-            var wasInSeriesRootBeforeMove = isInSeriesRoot;
-            if (wasInSeriesRootBeforeMove || seasonNumber == null)
+            
+            if (wasInSeriesRootBeforeMove)
             {
-                // If in series root (flat structure) or no season in metadata, use season 1
+                // Episode was in series root (flat structure) and we moved it to Season 1
                 seasonNumber = 1;
-                _logger.LogInformation("[MR] Using Season 1 for renaming (wasInSeriesRootBeforeMove={WasInSeriesRoot}, metadataSeason={MetadataSeason})", 
-                    wasInSeriesRootBeforeMove, episode.ParentIndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+                _logger.LogInformation("[MR] Episode was in series root (flat structure). Using Season 1 for renaming after moving to Season 1 folder.");
+            }
+            else if (seasonNumber == null)
+            {
+                // Episode is in a season folder but metadata doesn't have season number - use 1 as fallback
+                seasonNumber = 1;
+                _logger.LogInformation("[MR] Episode is in a season folder but metadata season number is NULL. Using Season 1 as fallback.");
+            }
+            else
+            {
+                // Episode is already in a season folder - use the actual season number from metadata
+                _logger.LogInformation("[MR] Episode is already in a season folder. Using season number from metadata: Season {Season}", 
+                    seasonNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
             }
             // #region agent log - Hypothesis C: Check IndexNumber at metadata access point
             try
@@ -649,7 +857,7 @@ public class RenameCoordinator
                 var parentIndexNumberBeforeAccess = episode.ParentIndexNumber;
                 var logData = new { sessionId = "debug-session", runId = "run1", hypothesisId = "C", location = "RenameCoordinator.cs:609", message = "IndexNumber accessed at metadata point", data = new { indexNumber = indexNumberBeforeAccess?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", parentIndexNumber = parentIndexNumberBeforeAccess?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", episodeId = episode.Id.ToString(), episodeName = episode.Name ?? "NULL" }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
                 var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson);
+                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
                 _logger.LogInformation("[MR] [DEBUG-HYP-C] IndexNumber at metadata access point: IndexNumber={IndexNumber}, ParentIndexNumber={ParentIndexNumber}, EpisodeId={Id}, Name={Name}", 
                     indexNumberBeforeAccess?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", 
                     parentIndexNumberBeforeAccess?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", episode.Id, episode.Name ?? "NULL");
@@ -658,7 +866,7 @@ public class RenameCoordinator
             {
                 var logData = new { sessionId = "debug-session", runId = "run1", hypothesisId = "C", location = "RenameCoordinator.cs:609", message = "ERROR accessing IndexNumber at metadata point", data = new { error = ex.Message, episodeId = episode.Id.ToString() }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
                 var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson);
+                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
                 _logger.LogError(ex, "[MR] [DEBUG-HYP-C] ERROR accessing IndexNumber at metadata point: {Error}", ex.Message);
             }
             // #endregion
@@ -675,7 +883,7 @@ public class RenameCoordinator
                 var seriesNameFromObj = seriesObj?.Name ?? "NULL";
                 var logData = new { sessionId = "debug-session", runId = "run1", hypothesisId = "D", location = "RenameCoordinator.cs:625", message = "Episode.Series object state", data = new { seriesType = seriesType, seriesId = seriesId, seriesName = seriesNameFromObj, episodeId = episode.Id.ToString() }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
                 var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson);
+                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
                 _logger.LogInformation("[MR] [DEBUG-HYP-D] Episode.Series state: Type={Type}, Id={Id}, Name={Name}, EpisodeId={EpisodeId}", 
                     seriesType, seriesId, seriesNameFromObj, episode.Id);
             }
@@ -683,7 +891,7 @@ public class RenameCoordinator
             {
                 var logData = new { sessionId = "debug-session", runId = "run1", hypothesisId = "D", location = "RenameCoordinator.cs:625", message = "ERROR accessing Series object", data = new { error = ex.Message, episodeId = episode.Id.ToString() }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
                 var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson);
+                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
                 _logger.LogError(ex, "[MR] [DEBUG-HYP-D] ERROR accessing Series object: {Error}", ex.Message);
             }
             // #endregion
@@ -748,7 +956,7 @@ public class RenameCoordinator
                     }
                     var logData = new { sessionId = "debug-session", runId = "run1", hypothesisId = "E", location = "RenameCoordinator.cs:640", message = "IndexNumber is NULL - full episode state", data = new { episodeType = episodeType.FullName, episodeId = episode.Id.ToString(), allProperties = allProps }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
                     var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                    System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson);
+                    try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
                     _logger.LogWarning("[MR] [DEBUG-HYP-E] IndexNumber is NULL! Episode type: {Type}, EpisodeId: {Id}, All properties: {Properties}", 
                         episodeType.FullName, episode.Id, string.Join("; ", allProps.Select(kvp => $"{kvp.Key}={kvp.Value}")));
                 }
@@ -756,7 +964,7 @@ public class RenameCoordinator
                 {
                     var logData = new { sessionId = "debug-session", runId = "run1", hypothesisId = "E", location = "RenameCoordinator.cs:640", message = "ERROR getting full episode state", data = new { error = ex.Message, episodeId = episode.Id.ToString() }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
                     var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                    System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson);
+                    try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
                     _logger.LogError(ex, "[MR] [DEBUG-HYP-E] ERROR getting full episode state: {Error}", ex.Message);
                 }
             }
@@ -863,6 +1071,51 @@ public class RenameCoordinator
         {
             _logger.LogError(ex, "[MR] ERROR in HandleEpisodeUpdate: {Message}", ex.Message);
             _logger.LogError("[MR] Stack Trace: {StackTrace}", ex.StackTrace ?? "N/A");
+        }
+    }
+
+    /// <summary>
+    /// Derives the series path from an episode file path by checking if the episode is in a season folder.
+    /// If the episode is in a season folder (e.g., "Season 01", "Season 1", "S01"), returns the parent directory.
+    /// Otherwise, returns the directory containing the episode file (series root).
+    /// </summary>
+    private string? DeriveSeriesPathFromEpisodePath(string episodeFilePath)
+    {
+        try
+        {
+            var episodeDirectory = Path.GetDirectoryName(episodeFilePath);
+            if (string.IsNullOrWhiteSpace(episodeDirectory))
+            {
+                return null;
+            }
+
+            var directoryName = Path.GetFileName(episodeDirectory);
+            if (string.IsNullOrWhiteSpace(directoryName))
+            {
+                return episodeDirectory;
+            }
+
+            // Check if the directory name matches common season folder patterns
+            var seasonPattern = new System.Text.RegularExpressions.Regex(
+                @"^(Season\s*\d+|S\d+|Season\s*\d{2,})$",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+            if (seasonPattern.IsMatch(directoryName))
+            {
+                // Episode is in a season folder, series path is the parent
+                var parentDirectory = Path.GetDirectoryName(episodeDirectory);
+                return parentDirectory;
+            }
+            else
+            {
+                // Episode is in series root, series path is the directory itself
+                return episodeDirectory;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[MR] Warning: Could not derive series path from episode path: {Path}, Error: {Error}", episodeFilePath, ex.Message);
+            return null;
         }
     }
 }

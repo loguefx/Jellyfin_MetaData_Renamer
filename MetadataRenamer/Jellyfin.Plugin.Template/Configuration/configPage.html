@@ -76,7 +76,14 @@
                             <input id="OnlyRenameWhenProviderIdsChange" name="OnlyRenameWhenProviderIdsChange" type="checkbox" is="emby-checkbox" />
                             <span>Only Rename When Provider IDs Change</span>
                         </label>
-                        <div class="fieldDescription">Only rename when provider IDs change (infers that Identify/refresh just happened)</div>
+                        <div class="fieldDescription">Only rename when provider IDs change (infers that Identify/refresh just happened). This works in conjunction with "Process During Library Scans" below.</div>
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label">
+                            <input id="ProcessDuringLibraryScans" name="ProcessDuringLibraryScans" type="checkbox" is="emby-checkbox" />
+                            <span>Process During Library Scans</span>
+                        </label>
+                        <div class="fieldDescription">When enabled, library scans (full or regular) will automatically update folder names and episode files to match metadata. When disabled, only the "Identify" flow will trigger updates (when provider IDs change). The existing "Identify" flow will always work regardless of this setting.</div>
                     </div>
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="PerItemCooldownSeconds">Per-Item Cooldown (seconds)</label>
@@ -111,6 +118,7 @@
                         document.querySelector('#EpisodeFileFormat').value = config.EpisodeFileFormat || 'S{Season:00}E{Episode:00} - {Title}';
                         document.querySelector('#PreferredSeriesProviders').value = (config.PreferredSeriesProviders || []).join(', ');
                         document.querySelector('#OnlyRenameWhenProviderIdsChange').checked = config.OnlyRenameWhenProviderIdsChange !== false;
+                        document.querySelector('#ProcessDuringLibraryScans').checked = config.ProcessDuringLibraryScans !== false;
                         document.querySelector('#PerItemCooldownSeconds').value = config.PerItemCooldownSeconds || 60;
                         Dashboard.hideLoadingMsg();
                     });
@@ -132,6 +140,7 @@
                     var providersText = document.querySelector('#PreferredSeriesProviders').value;
                     config.PreferredSeriesProviders = providersText ? providersText.split(',').map(function(p) { return p.trim(); }).filter(function(p) { return p.length > 0; }) : [];
                     config.OnlyRenameWhenProviderIdsChange = document.querySelector('#OnlyRenameWhenProviderIdsChange').checked;
+                    config.ProcessDuringLibraryScans = document.querySelector('#ProcessDuringLibraryScans').checked;
                     config.PerItemCooldownSeconds = parseInt(document.querySelector('#PerItemCooldownSeconds').value) || 60;
                     ApiClient.updatePluginConfiguration(MetadataRenamerConfig.pluginUniqueId, config).then(function (result) {
                         Dashboard.processPluginConfigurationUpdateResult(result);

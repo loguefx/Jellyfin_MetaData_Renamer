@@ -27,6 +27,7 @@ public class PluginConfiguration : BasePluginConfiguration
         EpisodeFileFormat = "S{Season:00}E{Episode:00} - {Title}";
         PreferredSeriesProviders = new Collection<string> { "Tvdb", "Tmdb", "Imdb" };
         OnlyRenameWhenProviderIdsChange = true;
+        ProcessDuringLibraryScans = true;
         PerItemCooldownSeconds = 60;
         AllowedLibraryNames = new Collection<string>();
     }
@@ -89,6 +90,13 @@ public class PluginConfiguration : BasePluginConfiguration
     /// Gets or sets a value indicating whether to only rename when provider IDs change (inferring Identify/refresh just happened).
     /// </summary>
     public bool OnlyRenameWhenProviderIdsChange { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether to process items during library scans.
+    /// When enabled, library scans will automatically update folder names and episode files to match metadata.
+    /// When disabled, only the "Identify" flow will trigger updates (when provider IDs change).
+    /// </summary>
+    public bool ProcessDuringLibraryScans { get; set; }
 
     /// <summary>
     /// Gets or sets the cooldown period in seconds between rename attempts for the same item.
