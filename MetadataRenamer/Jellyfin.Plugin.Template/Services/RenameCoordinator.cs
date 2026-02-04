@@ -483,12 +483,16 @@ public class RenameCoordinator
                 
                 // Create "Season 1" folder and move episode into it
                 // This ensures Jellyfin shows "Season 1" instead of "Season Unknown"
+                _logger.LogInformation("[MR] === Creating Season 1 Folder for Flat Structure ===");
+                _logger.LogInformation("[MR] Season Folder Format: {Format}", cfg.SeasonFolderFormat ?? "Season {Season:00}");
+                _logger.LogInformation("[MR] Season Number for folder: 1");
+                
                 var season1FolderName = SafeName.RenderSeasonFolder(cfg.SeasonFolderFormat, 1, null);
                 var season1FolderPath = Path.Combine(seriesPath, season1FolderName);
                 
-                _logger.LogInformation("[MR] === Creating Season 1 Folder for Flat Structure ===");
-                _logger.LogInformation("[MR] Season 1 Folder Name: {FolderName}", season1FolderName);
+                _logger.LogInformation("[MR] Season 1 Folder Name (rendered): {FolderName}", season1FolderName);
                 _logger.LogInformation("[MR] Season 1 Folder Path: {FolderPath}", season1FolderPath);
+                _logger.LogInformation("[MR] Series Path: {SeriesPath}", seriesPath);
                 
                 if (!Directory.Exists(season1FolderPath))
                 {
@@ -546,13 +550,23 @@ public class RenameCoordinator
             // - If episode was in series root (flat structure), we created Season 1 folder, so use season 1
             // - Otherwise, use metadata season number, defaulting to 1 if null
             int? seasonNumber = episode.ParentIndexNumber;
-            if (isInSeriesRoot || seasonNumber == null)
+            // Remember if we were in series root BEFORE moving (capture before isInSeriesRoot is set to false)
+            var wasInSeriesRootBeforeMove = isInSeriesRoot;
+            if (wasInSeriesRootBeforeMove || seasonNumber == null)
             {
                 // If in series root (flat structure) or no season in metadata, use season 1
                 seasonNumber = 1;
+                _logger.LogInformation("[MR] Using Season 1 for renaming (wasInSeriesRootBeforeMove={WasInSeriesRoot}, metadataSeason={MetadataSeason})", 
+                    wasInSeriesRootBeforeMove, episode.ParentIndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
             }
             var episodeNumber = episode.IndexNumber; // Episode number from metadata
             var seriesName = episode.SeriesName?.Trim() ?? string.Empty;
+            
+            _logger.LogInformation("[MR] === Episode Metadata Debug ===");
+            _logger.LogInformation("[MR] episode.IndexNumber (raw): {IndexNumber}", episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+            _logger.LogInformation("[MR] episode.ParentIndexNumber (raw): {ParentIndexNumber}", episode.ParentIndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+            _logger.LogInformation("[MR] episode.Name (raw): {Name}", episode.Name ?? "NULL");
+            _logger.LogInformation("[MR] episode.SeriesName (raw): {SeriesName}", episode.SeriesName ?? "NULL");
             
             // Get year from series if available
             int? year = null;
@@ -579,13 +593,26 @@ public class RenameCoordinator
             _logger.LogInformation("[MR] Current Filename: {Current}", currentFileName);
             _logger.LogInformation("[MR] In Series Root (flat structure): {InSeriesRoot}", isInSeriesRoot);
 
-            // Episode number is REQUIRED from metadata - we cannot rename without it
+            // Episode number is REQUIRED - try to get it from metadata first, then fall back to filename parsing
             if (!episodeNumber.HasValue)
             {
-                _logger.LogWarning("[MR] SKIP: Episode missing episode number in metadata. Cannot determine correct episode number. Season={Season}, Episode={Episode}", 
-                    seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
-                    episodeNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
-                return;
+                _logger.LogWarning("[MR] Episode number is NULL in metadata. Attempting to parse from filename: {FileName}", currentFileName);
+                
+                // Try to parse episode number from filename as a fallback
+                var parsedEpisodeNumber = SafeName.ParseEpisodeNumberFromFileName(currentFileName);
+                if (parsedEpisodeNumber.HasValue)
+                {
+                    episodeNumber = parsedEpisodeNumber;
+                    _logger.LogInformation("[MR] ✓ Parsed episode number from filename: {EpisodeNumber}", episodeNumber.Value);
+                }
+                else
+                {
+                    _logger.LogWarning("[MR] SKIP: Episode missing episode number in metadata AND could not parse from filename. Cannot determine correct episode number. Season={Season}, Episode={Episode}, Filename={FileName}", 
+                        seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                        episodeNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                        currentFileName);
+                    return;
+                }
             }
 
             // SAFETY CHECK: Parse episode number from filename and compare with metadata

@@ -101,6 +101,15 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
                         files.Length, 
                         string.Join(", ", files.Select(f => System.IO.Path.GetFileName(f))));
                     
+                    // Also list directories
+                    var dirs = System.IO.Directory.GetDirectories(versionedPluginPath, "*", System.IO.SearchOption.AllDirectories);
+                    if (dirs.Length > 0)
+                    {
+                        _logger.LogInformation("[MR] Directories in versioned folder ({Count}): {Dirs}", 
+                            dirs.Length, 
+                            string.Join(", ", dirs.Select(d => System.IO.Path.GetFileName(d))));
+                    }
+                    
                     // Check for any file containing "delete" in the name (case-insensitive)
                     var deleteRelatedFiles = files.Where(f => 
                         System.IO.Path.GetFileName(f).Contains("delete", StringComparison.OrdinalIgnoreCase)).ToList();
@@ -109,11 +118,52 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
                         _logger.LogWarning("[MR] ⚠️ Found files with 'delete' in name: {Files}", 
                             string.Join(", ", deleteRelatedFiles.Select(f => System.IO.Path.GetFileName(f))));
                     }
+                    
+                    // Check for hidden files (including .deleteOnStartup)
+                    var hiddenFiles = files.Where(f => 
+                    {
+                        try
+                        {
+                            var fileInfo = new System.IO.FileInfo(f);
+                            return (fileInfo.Attributes & System.IO.FileAttributes.Hidden) != 0;
+                        }
+                        catch
+                        {
+                            return false;
+                        }
+                    }).ToList();
+                    if (hiddenFiles.Any())
+                    {
+                        _logger.LogInformation("[MR] Hidden files found ({Count}): {Files}", 
+                            hiddenFiles.Count, 
+                            string.Join(", ", hiddenFiles.Select(f => System.IO.Path.GetFileName(f))));
+                    }
                 }
                 catch (Exception listEx)
                 {
                     _logger.LogWarning(listEx, "[MR] Could not list files in versioned folder: {Message}", listEx.Message);
                 }
+            }
+            
+            // Also check parent directory for any delete markers
+            try
+            {
+                var parentDir = System.IO.Path.GetDirectoryName(versionedPluginPath);
+                if (!string.IsNullOrWhiteSpace(parentDir) && System.IO.Directory.Exists(parentDir))
+                {
+                    var parentFiles = System.IO.Directory.GetFiles(parentDir, "*", System.IO.SearchOption.TopDirectoryOnly);
+                    var parentDeleteFiles = parentFiles.Where(f => 
+                        System.IO.Path.GetFileName(f).Contains("delete", StringComparison.OrdinalIgnoreCase)).ToList();
+                    if (parentDeleteFiles.Any())
+                    {
+                        _logger.LogWarning("[MR] ⚠️ Found files with 'delete' in name in parent directory: {Files}", 
+                            string.Join(", ", parentDeleteFiles.Select(f => System.IO.Path.GetFileName(f))));
+                    }
+                }
+            }
+            catch (Exception parentEx)
+            {
+                _logger.LogWarning(parentEx, "[MR] Could not check parent directory for delete markers: {Message}", parentEx.Message);
             }
             
             // Check all marker paths

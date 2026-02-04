@@ -87,7 +87,12 @@ public static class SafeName
         if (seasonNumber.HasValue)
         {
             // Handle format specifiers like {Season:00} for zero-padding
-            s = Regex.Replace(s, @"{Season:(\d+)}", seasonNumber.Value.ToString($"D$1", CultureInfo.InvariantCulture), RegexOptions.IgnoreCase);
+            // Use MatchEvaluator to properly capture the padding value
+            s = Regex.Replace(s, @"{Season:(\d+)}", m =>
+            {
+                var padding = int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
+                return seasonNumber.Value.ToString($"D{padding}", CultureInfo.InvariantCulture);
+            }, RegexOptions.IgnoreCase);
             s = s.Replace("{Season}", seasonNumber.Value.ToString(CultureInfo.InvariantCulture), StringComparison.OrdinalIgnoreCase);
         }
         else
