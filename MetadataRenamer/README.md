@@ -298,6 +298,36 @@ Examples:
 - Respects "Process During Library Scans" setting
 - Works independently from series logic (no interference)
 
+### 8. Year Correction for Known Issues
+- Automatically corrects incorrect years from Jellyfin metadata for specific provider IDs
+- Example: Dororo (2019) with TMDB ID 83100 - Jellyfin sometimes provides 1969 (old version), plugin corrects to 2019
+- Logs show year before and after correction for transparency
+- Helps prevent incorrect folder names when Jellyfin metadata has year mismatches
+
+### 9. Smart Provider ID Detection
+- Detects which provider ID the user selected during "Identify" action
+- Compares current provider IDs with previous state to identify newly added/changed IDs
+- Uses the user-selected provider ID for renaming instead of just the preferred list
+- Falls back to preferred provider list if no user selection can be detected
+
+### 10. Provider ID Mismatch Detection
+- Detects when folder name has a different provider ID than metadata
+- Forces re-rename even if folder name otherwise matches desired name
+- Helps catch cases where Jellyfin initially provided wrong metadata
+- Ensures folder names always match the current metadata provider IDs
+
+### 11. Nested Season Folder Fix
+- Detects and fixes nested season folder structures (e.g., "Series - Season 1\Season 01")
+- Moves episodes from nested folders to parent season folder
+- Renames parent season folder to standard format (e.g., "Season 01")
+- Prevents "Season Unknown" issues in Jellyfin
+
+### 12. Automatic File Unblocking (Windows)
+- Automatically unblocks plugin files on Windows when downloaded from the internet
+- Prevents "Application Control" blocking issues
+- Uses PowerShell's `Unblock-File` cmdlet or removes `Zone.Identifier` alternate data stream
+- Runs automatically during plugin initialization
+
 ## Testing
 
 ### Step 1: Test with Dry Run (Default)
@@ -364,6 +394,13 @@ Look for log entries prefixed with `[MR]`:
 - `[MR] Episode File Rename Details` - Episode renaming information
 - `[MR] Episode is already in a season folder` - Episode processing in season folders
 - `[MR] Skip: ...` - Why a rename was skipped
+- `[MR] === Year Detection from Metadata (BEFORE Correction) ===` - Year detection before correction
+- `[MR] === Year Correction Applied ===` - Year correction details (before/after)
+- `[MR] FINAL Year (AFTER correction)` - Final year used for folder name
+- `[MR] === Provider IDs Details ===` - All provider IDs for the item
+- `[MR] ⚠️ YEAR CORRECTION` - Warning when year correction is applied
+- `[MR] ⚠️ WARNING: Multiple provider IDs detected` - Multiple provider IDs found
+- `[MR] ✓ Unblocked: ...` - File unblocking success (Windows)
 
 ## Troubleshooting
 
@@ -434,7 +471,9 @@ Look for log entries prefixed with `[MR]`:
 
 **Note:** The plugin uses whatever provider IDs Jellyfin assigns after you select a match. If you select the wrong match in Jellyfin's "Identify" screen, the plugin will use those incorrect IDs. Always verify you're selecting the correct entry (check year, description, and poster) before confirming.
 
-**Important:** Jellyfin may assign multiple provider IDs (e.g., both TVDB and TMDB) even when you select a single match. The plugin uses the "Preferred Series Providers" setting to determine which ID to use. By default, TMDB is prioritized over TVDB. If you're getting the wrong ID, check your plugin settings and adjust the provider preference order.
+**Important:** Jellyfin may assign multiple provider IDs (e.g., both TVDB and TMDB) even when you select a single match. The plugin uses smart detection to identify which provider ID you selected during "Identify" by comparing current and previous provider IDs. If no user selection can be detected, it falls back to the "Preferred Series Providers" setting. By default, TMDB is prioritized over TVDB. If you're getting the wrong ID, check your plugin settings and adjust the provider preference order. Check the logs for `[MR] ⚠️ WARNING: Multiple provider IDs detected` to see if this is happening.
+
+**Year Correction:** The plugin automatically corrects known year mismatches. For example, if Jellyfin provides year 1969 for Dororo (2019) with TMDB ID 83100, the plugin will correct it to 2019. Check logs for `[MR] ⚠️ YEAR CORRECTION` entries to see when corrections are applied.
 
 ### Movie Folders Not Renaming
 
