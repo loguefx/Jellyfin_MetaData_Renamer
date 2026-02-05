@@ -1823,8 +1823,8 @@ public class RenameCoordinator
                 year);
 
             _logger.LogInformation("[MR] === Episode File Rename Details ===");
-            _logger.LogInformation("[MR] Current File: {Current}{Extension}", currentFileName, fileExtension);
-            _logger.LogInformation("[MR] Desired File: {Desired}{Extension}", desiredFileName, fileExtension);
+            _logger.LogInformation("[MR] Current File: {Current}", currentFileName + fileExtension);
+            _logger.LogInformation("[MR] Desired File: {Desired}", desiredFileName + fileExtension);
             _logger.LogInformation("[MR] Format Template: {Format}", cfg.EpisodeFileFormat);
             _logger.LogInformation("[MR] ✓ Safety check passed: Filename episode number matches metadata episode number");
             _logger.LogInformation("[MR] ✓ Using metadata values: Season={Season}, Episode={Episode}, Title={Title}", 

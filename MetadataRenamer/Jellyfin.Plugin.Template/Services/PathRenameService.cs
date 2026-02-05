@@ -331,7 +331,7 @@ public class PathRenameService
         {
             _logger.LogInformation("[MR] === TryRenameEpisodeFile Called ===");
             _logger.LogInformation("[MR] Episode: {Name}, ID: {Id}", episode.Name, episode.Id);
-            _logger.LogInformation("[MR] Desired File Name: {Desired}{Extension}", desiredFileName, fileExtension);
+            _logger.LogInformation("[MR] Desired File Name: {Desired}", desiredFileName + fileExtension);
             _logger.LogInformation("[MR] Dry Run: {DryRun}", dryRun);
 
             currentPath = overridePath ?? episode.Path;
