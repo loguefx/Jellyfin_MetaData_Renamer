@@ -410,6 +410,10 @@ public class RenameCoordinator
                 
                 if (providerIdsChanged && previousProviderIds != null)
                 {
+                    // #region agent log - Provider ID Detection
+                    try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "PROVIDER-DETECT", location = "RenameCoordinator.cs:411", message = "Provider IDs changed - starting detection", data = new { seriesId = series.Id.ToString(), seriesName = series.Name ?? "NULL", previousProviderIds = previousProviderIds.Select(kv => $"{kv.Key}={kv.Value}").ToList(), currentProviderIds = series.ProviderIds?.Select(kv => $"{kv.Key}={kv.Value}").ToList() ?? new List<string>(), preferredProviders = cfg.PreferredSeriesProviders?.ToList() ?? new List<string>() }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+                    // #endregion
+                    
                     // Compare old vs new to find what changed
                     _logger.LogInformation("[MR] === Detecting User-Selected Provider (Identify) ===");
                     _logger.LogInformation("[MR] Previous Provider IDs: {Previous}", 
@@ -418,6 +422,9 @@ public class RenameCoordinator
                             : "NONE");
                     _logger.LogInformation("[MR] Current Provider IDs: {Current}", 
                         string.Join(", ", series.ProviderIds.Select(kv => $"{kv.Key}={kv.Value}")));
+                    
+                    // Collect all new/changed providers (don't break on first match)
+                    var changedProviders = new List<(string Key, string Value, string ChangeType)>();
                     
                     foreach (var kv in series.ProviderIds)
                     {
@@ -428,24 +435,61 @@ public class RenameCoordinator
                         if (!previousProviderIds.TryGetValue(providerKey, out var oldValue))
                         {
                             // New provider ID
-                            selectedProviderKey = providerKey;
-                            selectedProviderId = providerValue;
-                            _logger.LogInformation("[MR] ✓ Detected NEW provider: {Provider}={Id} (user selected this in Identify)", 
+                            changedProviders.Add((providerKey, providerValue, "NEW"));
+                            _logger.LogInformation("[MR] ✓ Detected NEW provider: {Provider}={Id}", 
                                 providerKey, providerValue);
-                            break; // Use the first new provider as the selected one
                         }
                         else if (oldValue != providerValue)
                         {
                             // Changed provider ID
-                            selectedProviderKey = providerKey;
-                            selectedProviderId = providerValue;
-                            _logger.LogInformation("[MR] ✓ Detected CHANGED provider: {Provider}={OldId} -> {NewId} (user selected this in Identify)", 
+                            changedProviders.Add((providerKey, providerValue, "CHANGED"));
+                            _logger.LogInformation("[MR] ✓ Detected CHANGED provider: {Provider}={OldId} -> {NewId}", 
                                 providerKey, oldValue, providerValue);
-                            break; // Use the first changed provider as the selected one
                         }
                     }
                     
-                    if (selectedProviderKey == null)
+                    // If multiple providers changed, prioritize based on preferred list
+                    if (changedProviders.Count > 0)
+                    {
+                        var preferredList = cfg.PreferredSeriesProviders != null
+                            ? cfg.PreferredSeriesProviders
+                            : new System.Collections.ObjectModel.Collection<string>();
+                        
+                        // #region agent log - Changed Providers List
+                        try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "PROVIDER-DETECT", location = "RenameCoordinator.cs:448", message = "Changed providers collected", data = new { changedProvidersCount = changedProviders.Count, changedProviders = changedProviders.Select(cp => new { key = cp.Key, value = cp.Value, changeType = cp.ChangeType }).ToList(), preferredList = preferredList.ToList() }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+                        // #endregion
+                        
+                        // Try to find a changed provider that matches the preferred list
+                        foreach (var preferred in preferredList)
+                        {
+                            var match = changedProviders.FirstOrDefault(cp => 
+                                string.Equals(cp.Key, preferred, StringComparison.OrdinalIgnoreCase));
+                            if (match.Key != null)
+                            {
+                                selectedProviderKey = match.Key;
+                                selectedProviderId = match.Value;
+                                // #region agent log - Provider Selected from Preferred
+                                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "PROVIDER-DETECT", location = "RenameCoordinator.cs:460", message = "Provider selected from preferred list", data = new { selectedProvider = selectedProviderKey, selectedId = selectedProviderId, changeType = match.ChangeType, preferred = preferred }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+                                // #endregion
+                                _logger.LogInformation("[MR] ✓ Selected provider from changed list (prioritized by preference): {Provider}={Id} ({ChangeType})", 
+                                    selectedProviderKey, selectedProviderId, match.ChangeType);
+                                break;
+                            }
+                        }
+                        
+                        // If no preferred match found, use the first changed provider
+                        if (selectedProviderKey == null)
+                        {
+                            selectedProviderKey = changedProviders[0].Key;
+                            selectedProviderId = changedProviders[0].Value;
+                            // #region agent log - Provider Selected (First Changed)
+                            try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "PROVIDER-DETECT", location = "RenameCoordinator.cs:470", message = "Provider selected (first changed, no preferred match)", data = new { selectedProvider = selectedProviderKey, selectedId = selectedProviderId, changeType = changedProviders[0].ChangeType }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+                            // #endregion
+                            _logger.LogInformation("[MR] ✓ Selected first changed provider: {Provider}={Id} ({ChangeType})", 
+                                selectedProviderKey, selectedProviderId, changedProviders[0].ChangeType);
+                        }
+                    }
+                    else
                     {
                         _logger.LogWarning("[MR] ⚠️ No newly added/changed provider detected (all IDs were already present). This may indicate the wrong match was selected.");
                         _logger.LogWarning("[MR] ⚠️ If you selected a different match in Identify, you may need to clear the series metadata first, then re-identify.");
@@ -863,6 +907,142 @@ public class RenameCoordinator
     /// This is called after a successful series folder rename to ensure episodes are properly organized.
     /// Only processes episodes if they are in the series root AND no season folders already exist.
     /// </summary>
+    /// <summary>
+    /// Fixes nested season folder structures (e.g., "Dororo - Season 1\Season 01").
+    /// Moves episodes from nested folders up to the parent and renames the parent to the desired format.
+    /// </summary>
+    private void FixNestedSeasonFolders(string seriesPath, PluginConfiguration cfg)
+    {
+        try
+        {
+            // #region agent log - FixNestedSeasonFolders Entry
+            try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "NESTED-SEASON", location = "RenameCoordinator.cs:900", message = "FixNestedSeasonFolders called", data = new { seriesPath = seriesPath ?? "NULL", pathExists = !string.IsNullOrWhiteSpace(seriesPath) && Directory.Exists(seriesPath) }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+            // #endregion
+            
+            if (string.IsNullOrWhiteSpace(seriesPath) || !Directory.Exists(seriesPath))
+            {
+                return;
+            }
+
+            _logger.LogInformation("[MR] === Checking for nested season folders ===");
+            _logger.LogInformation("[MR] Series path: {Path}", seriesPath);
+
+            // Pattern 1: Standard season folders (Season 1, Season 01, S1, etc.)
+            var standardSeasonPattern = new System.Text.RegularExpressions.Regex(
+                @"^(Season\s*\d+|S\d+|Season\s*\d{2,})$",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            
+            // Pattern 2: Folders containing "Season" or "S" followed by a number (e.g., "Dororo - Season 1")
+            var containsSeasonPattern = new System.Text.RegularExpressions.Regex(
+                @".*\b(Season|S)\s*\d+.*",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+            var subdirectories = Directory.GetDirectories(seriesPath);
+            var seasonFolders = new List<string>();
+            
+            foreach (var dir in subdirectories)
+            {
+                var dirName = Path.GetFileName(dir);
+                if (standardSeasonPattern.IsMatch(dirName) || containsSeasonPattern.IsMatch(dirName))
+                {
+                    seasonFolders.Add(dir);
+                }
+            }
+
+            if (seasonFolders.Count == 0)
+            {
+                return; // No season folders to check
+            }
+
+            _logger.LogInformation("[MR] Found {Count} season folder(s). Checking for nested structures...", seasonFolders.Count);
+            
+            // Check if any season folders need to be renamed to match the format
+            var desiredSeason1Name = SafeName.RenderSeasonFolder(cfg.SeasonFolderFormat, 1, null);
+            var desiredSeason1Path = Path.Combine(seriesPath, desiredSeason1Name);
+            
+            foreach (var seasonFolder in seasonFolders)
+            {
+                var seasonFolderName = Path.GetFileName(seasonFolder);
+                
+                // If this looks like Season 1 but has a different name, check if we should rename it
+                if (containsSeasonPattern.IsMatch(seasonFolderName) && 
+                    !standardSeasonPattern.IsMatch(seasonFolderName) &&
+                    System.Text.RegularExpressions.Regex.IsMatch(seasonFolderName, @"\b(Season|S)\s*1\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                {
+                    // This is a Season 1 folder with a non-standard name (e.g., "Dororo - Season 1")
+                    // Check if there's a nested "Season 01" folder inside it
+                    var nestedSeason01Path = Path.Combine(seasonFolder, desiredSeason1Name);
+                    // #region agent log - Nested Folder Check
+                    try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "NESTED-SEASON", location = "RenameCoordinator.cs:956", message = "Checking for nested season folder", data = new { seasonFolderName = seasonFolderName, desiredSeason1Name = desiredSeason1Name, nestedPath = nestedSeason01Path, nestedExists = Directory.Exists(nestedSeason01Path) }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+                    // #endregion
+                    if (Directory.Exists(nestedSeason01Path))
+                    {
+                        _logger.LogInformation("[MR] Found nested '{DesiredName}' folder inside '{CurrentName}'. Moving episodes up and removing nested folder...", 
+                            desiredSeason1Name, seasonFolderName);
+                        
+                        // Move all files from nested "Season 01" to the parent season folder
+                        var nestedFiles = Directory.GetFiles(nestedSeason01Path);
+                        foreach (var file in nestedFiles)
+                        {
+                            var fileName = Path.GetFileName(file);
+                            var targetPath = Path.Combine(seasonFolder, fileName);
+                            
+                            if (File.Exists(targetPath))
+                            {
+                                _logger.LogWarning("[MR] SKIP: Target file already exists. File: {FileName}", fileName);
+                                continue;
+                            }
+                            
+                            try
+                            {
+                                File.Move(file, targetPath);
+                                _logger.LogInformation("[MR] ✓ Moved episode from nested folder: {FileName}", fileName);
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogError(ex, "[MR] ERROR: Failed to move file. File: {FileName}, Error: {Error}", fileName, ex.Message);
+                            }
+                        }
+                        
+                        // Remove the nested "Season 01" folder if it's empty
+                        try
+                        {
+                            if (Directory.GetFiles(nestedSeason01Path).Length == 0 && 
+                                Directory.GetDirectories(nestedSeason01Path).Length == 0)
+                            {
+                                Directory.Delete(nestedSeason01Path);
+                                _logger.LogInformation("[MR] ✓ Removed empty nested folder: {Path}", nestedSeason01Path);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "[MR] Could not remove nested folder (may not be empty): {Path}", nestedSeason01Path);
+                        }
+                    }
+                    
+                    // Rename the season folder to match the desired format
+                    if (!string.Equals(seasonFolderName, desiredSeason1Name, StringComparison.OrdinalIgnoreCase))
+                    {
+                        try
+                        {
+                            Directory.Move(seasonFolder, desiredSeason1Path);
+                            _logger.LogInformation("[MR] ✓ Renamed season folder: '{OldName}' -> '{NewName}'", seasonFolderName, desiredSeason1Name);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError(ex, "[MR] ERROR: Failed to rename season folder. Old: {OldName}, New: {NewName}, Error: {Error}", 
+                                seasonFolderName, desiredSeason1Name, ex.Message);
+                        }
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[MR] ERROR in FixNestedSeasonFolders: {Message}", ex.Message);
+        }
+    }
+
     private void ProcessEpisodesInSeriesRoot(string seriesPath, PluginConfiguration cfg, DateTime now)
     {
         try
@@ -908,83 +1088,8 @@ public class RenameCoordinator
             {
                 _logger.LogInformation("[MR] Series already has {Count} season folder(s). Checking if they need to be renamed...", seasonFolders.Count);
                 
-                // Check if any season folders need to be renamed to match the format
-                var desiredSeason1Name = SafeName.RenderSeasonFolder(cfg.SeasonFolderFormat, 1, null);
-                var desiredSeason1Path = Path.Combine(seriesPath, desiredSeason1Name);
-                
-                foreach (var seasonFolder in seasonFolders)
-                {
-                    var seasonFolderName = Path.GetFileName(seasonFolder);
-                    
-                    // If this looks like Season 1 but has a different name, check if we should rename it
-                    if (containsSeasonPattern.IsMatch(seasonFolderName) && 
-                        !standardSeasonPattern.IsMatch(seasonFolderName) &&
-                        System.Text.RegularExpressions.Regex.IsMatch(seasonFolderName, @"\b(Season|S)\s*1\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
-                    {
-                        // This is a Season 1 folder with a non-standard name (e.g., "Dororo - Season 1")
-                        // Check if there's a nested "Season 01" folder inside it
-                        var nestedSeason01Path = Path.Combine(seasonFolder, desiredSeason1Name);
-                        if (Directory.Exists(nestedSeason01Path))
-                        {
-                            _logger.LogInformation("[MR] Found nested '{DesiredName}' folder inside '{CurrentName}'. Moving episodes up and removing nested folder...", 
-                                desiredSeason1Name, seasonFolderName);
-                            
-                            // Move all files from nested "Season 01" to the parent season folder
-                            var nestedFiles = Directory.GetFiles(nestedSeason01Path);
-                            foreach (var file in nestedFiles)
-                            {
-                                var fileName = Path.GetFileName(file);
-                                var targetPath = Path.Combine(seasonFolder, fileName);
-                                
-                                if (File.Exists(targetPath))
-                                {
-                                    _logger.LogWarning("[MR] SKIP: Target file already exists. File: {FileName}", fileName);
-                                    continue;
-                                }
-                                
-                                try
-                                {
-                                    File.Move(file, targetPath);
-                                    _logger.LogInformation("[MR] ✓ Moved episode from nested folder: {FileName}", fileName);
-                                }
-                                catch (Exception ex)
-                                {
-                                    _logger.LogError(ex, "[MR] ERROR: Failed to move file. File: {FileName}, Error: {Error}", fileName, ex.Message);
-                                }
-                            }
-                            
-                            // Remove the nested "Season 01" folder if it's empty
-                            try
-                            {
-                                if (Directory.GetFiles(nestedSeason01Path).Length == 0 && 
-                                    Directory.GetDirectories(nestedSeason01Path).Length == 0)
-                                {
-                                    Directory.Delete(nestedSeason01Path);
-                                    _logger.LogInformation("[MR] ✓ Removed empty nested folder: {Path}", nestedSeason01Path);
-                                }
-                            }
-                            catch (Exception ex)
-                            {
-                                _logger.LogWarning(ex, "[MR] Could not remove nested folder (may not be empty): {Path}", nestedSeason01Path);
-                            }
-                        }
-                        
-                        // Rename the season folder to match the desired format
-                        if (!string.Equals(seasonFolderName, desiredSeason1Name, StringComparison.OrdinalIgnoreCase))
-                        {
-                            try
-                            {
-                                Directory.Move(seasonFolder, desiredSeason1Path);
-                                _logger.LogInformation("[MR] ✓ Renamed season folder: '{OldName}' -> '{NewName}'", seasonFolderName, desiredSeason1Name);
-                            }
-                            catch (Exception ex)
-                            {
-                                _logger.LogError(ex, "[MR] ERROR: Failed to rename season folder. Old: {OldName}, New: {NewName}, Error: {Error}", 
-                                    seasonFolderName, desiredSeason1Name, ex.Message);
-                            }
-                        }
-                    }
-                }
+                // Fix any nested season folder structures (e.g., "Dororo - Season 1\Season 01")
+                FixNestedSeasonFolders(seriesPath, cfg);
                 
                 _logger.LogInformation("[MR] Season folders detected and processed. Skipping episode organization - episodes are already structured correctly.");
                 return;
@@ -1260,6 +1365,15 @@ public class RenameCoordinator
             
             _logger.LogInformation("[MR] Series path from file system: {FromFile}, from metadata: {FromMetadata}, using: {Using}", 
                 seriesPathFromFile ?? "NULL", seriesPathFromMetadata ?? "NULL", seriesPath ?? "NULL");
+            
+            // Fix any nested season folder structures (e.g., "Dororo - Season 1\Season 01") before processing episodes
+            if (!string.IsNullOrWhiteSpace(seriesPath) && Directory.Exists(seriesPath))
+            {
+                // #region agent log - FixNestedSeasonFolders Call from Episode
+                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "NESTED-SEASON", location = "RenameCoordinator.cs:1293", message = "Calling FixNestedSeasonFolders from HandleEpisodeUpdate", data = new { episodeId = episode.Id.ToString(), episodeName = episode.Name ?? "NULL", seriesPath = seriesPath }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+                // #endregion
+                FixNestedSeasonFolders(seriesPath, cfg);
+            }
             
             // Check if episode is directly in series folder (no season folder)
             var isInSeriesRoot = !string.IsNullOrWhiteSpace(seriesPath) && 
