@@ -262,6 +262,9 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
             
             _logger.LogInformation("[MR] ✓ No delete marker found - plugin will load normally");
             
+            // Attempt to unblock any blocked files in the plugin directory
+            TryUnblockPluginFiles(dllDirectory ?? versionedPluginPath);
+            
             // #region agent log - Uninstall debugging
             try
             {
@@ -355,6 +358,116 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
             // Try to log even if logger isn't available
             try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "A", location = "Plugin.cs:50", message = "ERROR in constructor", data = new { error = ex.Message, stackTrace = ex.StackTrace }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
             throw;
+        }
+    }
+
+    /// <summary>
+    /// Attempts to unblock files in the plugin directory that may be blocked by Windows Application Control.
+    /// </summary>
+    /// <param name="pluginDirectory">The plugin directory path.</param>
+    private void TryUnblockPluginFiles(string pluginDirectory)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(pluginDirectory) || !Directory.Exists(pluginDirectory))
+            {
+                _logger.LogWarning("[MR] Cannot unblock files - plugin directory not found: {Path}", pluginDirectory ?? "NULL");
+                return;
+            }
+
+            _logger.LogInformation("[MR] === Attempting to Unblock Plugin Files ===");
+            _logger.LogInformation("[MR] Plugin Directory: {Path}", pluginDirectory);
+
+            var files = Directory.GetFiles(pluginDirectory, "*", SearchOption.AllDirectories);
+            var unblockedCount = 0;
+            var failedCount = 0;
+
+            foreach (var filePath in files)
+            {
+                try
+                {
+                    var fileInfo = new FileInfo(filePath);
+                    var fileName = fileInfo.Name;
+
+                    // Method 1: Try using PowerShell Unblock-File via Process.Start
+                    try
+                    {
+                        var processStartInfo = new System.Diagnostics.ProcessStartInfo
+                        {
+                            FileName = "powershell.exe",
+                            Arguments = $"-Command \"Unblock-File -Path '{filePath.Replace("'", "''")}' -ErrorAction SilentlyContinue\"",
+                            UseShellExecute = false,
+                            CreateNoWindow = true,
+                            RedirectStandardOutput = true,
+                            RedirectStandardError = true,
+                            WindowStyle = System.Diagnostics.ProcessWindowStyle.Hidden
+                        };
+
+                        using (var process = System.Diagnostics.Process.Start(processStartInfo))
+                        {
+                            if (process != null)
+                            {
+                                process.WaitForExit(5000); // Wait max 5 seconds
+                                if (process.ExitCode == 0)
+                                {
+                                    unblockedCount++;
+                                    _logger.LogInformation("[MR] ✓ Unblocked: {FileName}", fileName);
+                                }
+                                else
+                                {
+                                    // Exit code non-zero doesn't necessarily mean failure
+                                    // The file might already be unblocked
+                                    _logger.LogDebug("[MR] Unblock attempt for {FileName} returned exit code {Code}", fileName, process.ExitCode);
+                                }
+                            }
+                        }
+                    }
+                    catch (Exception psEx)
+                    {
+                        _logger.LogWarning(psEx, "[MR] PowerShell unblock failed for {FileName}: {Message}", fileName, psEx.Message);
+                        
+                        // Method 2: Try removing the Zone.Identifier alternate data stream directly
+                        try
+                        {
+                            var zoneIdentifierPath = $"{filePath}:Zone.Identifier";
+                            if (File.Exists(zoneIdentifierPath))
+                            {
+                                File.Delete(zoneIdentifierPath);
+                                unblockedCount++;
+                                _logger.LogInformation("[MR] ✓ Removed Zone.Identifier for: {FileName}", fileName);
+                            }
+                        }
+                        catch (Exception adsEx)
+                        {
+                            _logger.LogDebug(adsEx, "[MR] Could not remove Zone.Identifier for {FileName}: {Message}", fileName, adsEx.Message);
+                            failedCount++;
+                        }
+                    }
+                }
+                catch (Exception fileEx)
+                {
+                    _logger.LogWarning(fileEx, "[MR] Error processing file {FileName}: {Message}", Path.GetFileName(filePath), fileEx.Message);
+                    failedCount++;
+                }
+            }
+
+            _logger.LogInformation("[MR] === Unblock Results ===");
+            _logger.LogInformation("[MR] Total Files: {Total}, Unblocked: {Unblocked}, Failed: {Failed}", files.Length, unblockedCount, failedCount);
+            
+            if (unblockedCount > 0)
+            {
+                _logger.LogInformation("[MR] ✓ Successfully unblocked {Count} file(s)", unblockedCount);
+            }
+            
+            if (failedCount > 0)
+            {
+                _logger.LogWarning("[MR] ⚠️ Failed to unblock {Count} file(s). Plugin may still work if files are not actually blocked.", failedCount);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[MR] Error attempting to unblock plugin files: {Message}", ex.Message);
+            _logger.LogWarning("[MR] Plugin will continue loading - unblocking is optional");
         }
     }
 
