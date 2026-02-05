@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using Jellyfin.Plugin.MetadataRenamer.Configuration;
 using MediaBrowser.Controller.Entities.TV;
+using MediaBrowser.Controller.Entities.Movies;
 using MediaBrowser.Controller.Library;
 using Microsoft.Extensions.Logging;
 using MediaBrowser.Controller.Entities;
@@ -72,11 +73,11 @@ public class RenameCoordinator
             _logger.LogInformation("[MR] Item Name: {Name}", e.Item?.Name ?? "NULL");
             _logger.LogInformation("[MR] Item ID: {Id}", e.Item?.Id.ToString() ?? "NULL");
             _logger.LogInformation(
-                "[MR] Configuration: Enabled={Enabled}, RenameSeriesFolders={RenameSeriesFolders}, RenameSeasonFolders={RenameSeasonFolders}, RenameEpisodeFiles={RenameEpisodeFiles}, DryRun={DryRun}, RequireProviderIdMatch={RequireProviderIdMatch}, OnlyRenameWhenProviderIdsChange={OnlyRenameWhenProviderIdsChange}, ProcessDuringLibraryScans={ProcessDuringLibraryScans}",
-                cfg.Enabled, cfg.RenameSeriesFolders, cfg.RenameSeasonFolders, cfg.RenameEpisodeFiles, cfg.DryRun, cfg.RequireProviderIdMatch, cfg.OnlyRenameWhenProviderIdsChange, cfg.ProcessDuringLibraryScans);
+                "[MR] Configuration: Enabled={Enabled}, RenameSeriesFolders={RenameSeriesFolders}, RenameSeasonFolders={RenameSeasonFolders}, RenameEpisodeFiles={RenameEpisodeFiles}, RenameMovieFolders={RenameMovieFolders}, DryRun={DryRun}, RequireProviderIdMatch={RequireProviderIdMatch}, OnlyRenameWhenProviderIdsChange={OnlyRenameWhenProviderIdsChange}, ProcessDuringLibraryScans={ProcessDuringLibraryScans}",
+                cfg.Enabled, cfg.RenameSeriesFolders, cfg.RenameSeasonFolders, cfg.RenameEpisodeFiles, cfg.RenameMovieFolders, cfg.DryRun, cfg.RequireProviderIdMatch, cfg.OnlyRenameWhenProviderIdsChange, cfg.ProcessDuringLibraryScans);
 
-            if (!cfg.Enabled)
-            {
+        if (!cfg.Enabled)
+        {
                 // #region agent log
                 try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "D", location = "RenameCoordinator.cs:49", message = "Plugin disabled", data = new { itemType = e.Item?.GetType().Name ?? "null" }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
                 // #endregion
@@ -99,14 +100,14 @@ public class RenameCoordinator
                 }
                 _lastGlobalActionUtc = now;
 
-                if (!cfg.RenameSeriesFolders)
-                {
+        if (!cfg.RenameSeriesFolders)
+        {
                     _logger.LogInformation("[MR] SKIP: RenameSeriesFolders is disabled in configuration");
                     return;
                 }
                 HandleSeriesUpdate(series, cfg, now);
-                return;
-            }
+            return;
+        }
 
             // Handle Season items
             if (e.Item is Season season)
@@ -127,8 +128,8 @@ public class RenameCoordinator
                     return;
                 }
                 HandleSeasonUpdate(season, cfg, now);
-                return;
-            }
+            return;
+        }
 
             // Handle Episode items
             if (e.Item is Episode episode)
@@ -182,8 +183,30 @@ public class RenameCoordinator
                 return;
             }
 
+            // Handle Movie items
+            if (e.Item is Movie movie)
+            {
+                // Debounce global spam for Movie items only
+                var timeSinceLastAction = now - _lastGlobalActionUtc;
+                if (timeSinceLastAction < _globalMinInterval)
+                {
+                    _logger.LogInformation("[MR] SKIP: Global debounce active. Time since last action: {Seconds} seconds (min: {MinSeconds})",
+                        timeSinceLastAction.TotalSeconds, _globalMinInterval.TotalSeconds);
+                    return;
+                }
+                _lastGlobalActionUtc = now;
+
+                if (!cfg.RenameMovieFolders)
+                {
+                    _logger.LogInformation("[MR] SKIP: RenameMovieFolders is disabled in configuration");
+                    return;
+                }
+                HandleMovieUpdate(movie, cfg, now);
+                return;
+            }
+
             // Skip other item types
-            _logger.LogInformation("[MR] SKIP: Item is not a Series, Season, or Episode. Type={Type}, Name={Name}", e.Item?.GetType().Name ?? "NULL", e.Item?.Name ?? "NULL");
+            _logger.LogInformation("[MR] SKIP: Item is not a Series, Season, Episode, or Movie. Type={Type}, Name={Name}", e.Item?.GetType().Name ?? "NULL", e.Item?.Name ?? "NULL");
             return;
         }
         catch (Exception ex)
@@ -434,6 +457,211 @@ public class RenameCoordinator
     }
 
     /// <summary>
+    /// Handles movie folder renaming.
+    /// </summary>
+    private void HandleMovieUpdate(Movie movie, PluginConfiguration cfg, DateTime now)
+    {
+        _logger.LogInformation("[MR] Processing Movie: Name={Name}, Id={Id}, Path={Path}", movie.Name, movie.Id, movie.Path);
+
+        // Per-item cooldown
+        if (_lastAttemptUtcByItem.TryGetValue(movie.Id, out var lastTry))
+        {
+            var timeSinceLastTry = (now - lastTry).TotalSeconds;
+            if (timeSinceLastTry < cfg.PerItemCooldownSeconds)
+            {
+                _logger.LogInformation(
+                    "[MR] SKIP: Cooldown active. MovieId={Id}, Name={Name}, Time since last try: {Seconds} seconds (cooldown: {CooldownSeconds})",
+                    movie.Id, movie.Name, timeSinceLastTry.ToString(System.Globalization.CultureInfo.InvariantCulture), cfg.PerItemCooldownSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                return;
+            }
+        }
+
+        _lastAttemptUtcByItem[movie.Id] = now;
+
+        var path = movie.Path;
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            _logger.LogWarning("[MR] SKIP: Movie has no path. MovieId={Id}, Name={Name}", movie.Id, movie.Name);
+            return;
+        }
+
+        // For movies, Path points to the movie file, not the folder
+        // We need to get the directory containing the movie file
+        var movieDirectory = Path.GetDirectoryName(path);
+        if (string.IsNullOrWhiteSpace(movieDirectory) || !Directory.Exists(movieDirectory))
+        {
+            _logger.LogWarning("[MR] SKIP: Movie directory does not exist on disk. Path={Path}, MovieId={Id}, Name={Name}", path, movie.Id, movie.Name);
+            return;
+        }
+
+        _logger.LogInformation("[MR] Movie directory verified: {Path}", movieDirectory);
+
+        // Check provider IDs
+        var providerIdsCount = movie.ProviderIds?.Count ?? 0;
+        var providerIdsString = movie.ProviderIds != null
+            ? string.Join(", ", movie.ProviderIds.Select(kv => $"{kv.Key}={kv.Value}"))
+            : "NONE";
+
+        _logger.LogInformation("[MR] Provider IDs: Count={Count}, Values={Values}", providerIdsCount, providerIdsString);
+
+        // Must be matched
+        if (cfg.RequireProviderIdMatch)
+        {
+            if (movie.ProviderIds == null || movie.ProviderIds.Count == 0)
+            {
+                _logger.LogWarning("[MR] SKIP: RequireProviderIdMatch is true but no ProviderIds found. Name={Name}", movie.Name);
+                return;
+            }
+            _logger.LogInformation("[MR] Provider ID requirement satisfied");
+        }
+
+        var name = movie.Name?.Trim();
+
+        // Try ProductionYear first, then PremiereDate as fallback
+        int? year = movie.ProductionYear;
+        string yearSource = "ProductionYear";
+
+        if (year is null && movie.PremiereDate.HasValue)
+        {
+            year = movie.PremiereDate.Value.Year;
+            yearSource = "PremiereDate";
+        }
+
+        _logger.LogInformation("[MR] Movie metadata: Name={Name}, Year={Year} (from {YearSource}), ProviderIds={ProviderIds}",
+            name ?? "NULL",
+            year?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+            yearSource,
+            providerIdsString);
+
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            _logger.LogWarning("[MR] SKIP: Missing required metadata. Name={Name}", name ?? "NULL");
+            return;
+        }
+
+        // Check if we should process during library scans (same logic as series)
+        var hasProviderIds = movie.ProviderIds != null && movie.ProviderIds.Count > 0;
+        var newHash = hasProviderIds && movie.ProviderIds != null
+            ? ProviderIdHelper.ComputeProviderHash(movie.ProviderIds)
+            : string.Empty;
+
+        var hasOldHash = _providerHashByItem.TryGetValue(movie.Id, out var oldHash);
+        var providerIdsChanged = hasOldHash && !string.Equals(newHash, oldHash, StringComparison.Ordinal);
+        var isFirstTime = !hasOldHash;
+
+        _logger.LogInformation("[MR] === Provider Hash Check (Movie) ===");
+        _logger.LogInformation("[MR] ProcessDuringLibraryScans: {ProcessDuringLibraryScans}", cfg.ProcessDuringLibraryScans);
+        _logger.LogInformation("[MR] OnlyRenameWhenProviderIdsChange: {OnlyRenameWhenProviderIdsChange}", cfg.OnlyRenameWhenProviderIdsChange);
+        _logger.LogInformation("[MR] Has Provider IDs: {HasProviderIds}", hasProviderIds);
+        _logger.LogInformation("[MR] Old Hash Exists: {HasOldHash}, Value: {OldHash}", hasOldHash, oldHash ?? "(none)");
+        _logger.LogInformation("[MR] New Hash: {NewHash}", newHash);
+        _logger.LogInformation("[MR] Provider IDs Changed: {Changed}, First Time: {FirstTime}", providerIdsChanged, isFirstTime);
+        _logger.LogInformation("[MR] Movie: {Name}", name);
+
+        // Determine if we should proceed with rename (same logic as series)
+        bool shouldProceed = false;
+        string proceedReason = string.Empty;
+
+        if (cfg.OnlyRenameWhenProviderIdsChange)
+        {
+            if (providerIdsChanged || isFirstTime)
+            {
+                shouldProceed = true;
+                proceedReason = providerIdsChanged ? "Provider IDs changed (Identify flow)" : "First time processing";
+            }
+            else if (cfg.ProcessDuringLibraryScans)
+            {
+                shouldProceed = true;
+                proceedReason = "ProcessDuringLibraryScans enabled (library scan)";
+            }
+            else
+            {
+                shouldProceed = false;
+                proceedReason = "Provider IDs unchanged and ProcessDuringLibraryScans disabled";
+            }
+        }
+        else
+        {
+            shouldProceed = true;
+            proceedReason = "OnlyRenameWhenProviderIdsChange disabled";
+        }
+
+        if (!shouldProceed)
+        {
+            _logger.LogWarning("[MR] SKIP: {Reason}. Name={Name}, Hash={Hash}", proceedReason, name, newHash);
+            _logger.LogInformation("[MR] ===== Processing Complete (Skipped) =====");
+            return;
+        }
+
+        // Update hash and proceed
+        _logger.LogInformation("[MR] ✓ Proceeding with rename. Reason: {Reason}", proceedReason);
+        _logger.LogInformation("[MR] Old Hash: {OldHash}, New Hash: {NewHash}", oldHash ?? "(none)", newHash);
+        if (hasProviderIds && movie.ProviderIds != null)
+        {
+            _providerHashByItem[movie.Id] = newHash;
+        }
+
+        // Handle provider IDs - use if available, otherwise use empty values
+        string providerLabel = string.Empty;
+        string providerId = string.Empty;
+
+        if (movie.ProviderIds != null && movie.ProviderIds.Count > 0)
+        {
+            var preferredProviders = cfg.PreferredMovieProviders != null
+                ? string.Join(", ", cfg.PreferredMovieProviders)
+                : "NONE";
+            _logger.LogInformation("[MR] Preferred Providers: {Providers}", preferredProviders);
+
+            var preferredList = cfg.PreferredMovieProviders != null
+                ? cfg.PreferredMovieProviders
+                : new System.Collections.ObjectModel.Collection<string>();
+            var best = ProviderIdHelper.GetBestProvider(movie.ProviderIds, preferredList);
+            if (best != null)
+            {
+                providerLabel = best.Value.ProviderLabel;
+                providerId = best.Value.Id;
+                _logger.LogInformation("[MR] Selected Provider: {Provider}={Id}", providerLabel, providerId);
+            }
+            else
+            {
+                _logger.LogWarning("[MR] No matching provider found in preferred list");
+            }
+        }
+        else if (cfg.RequireProviderIdMatch)
+        {
+            _logger.LogWarning("[MR] SKIP: RequireProviderIdMatch is true but no ProviderIds found. Name={Name}", name);
+            _logger.LogInformation("[MR] ===== Processing Complete (Skipped) =====");
+            return;
+        }
+        else
+        {
+            _logger.LogInformation("[MR] No ProviderIds but RequireProviderIdMatch is false - renaming to help identification");
+        }
+
+        // Build final desired folder name: Name (Year) [provider-id] or Name (Year) if no provider IDs
+        var currentFolderName = Path.GetFileName(movieDirectory);
+        var desiredFolderName = SafeName.RenderMovieFolder(
+            cfg.MovieFolderFormat,
+            name,
+            year,
+            providerLabel,
+            providerId);
+
+        _logger.LogInformation("[MR] Desired folder name: {DesiredName} (year available: {HasYear})", desiredFolderName, year.HasValue);
+
+        _logger.LogInformation("[MR] === Movie Folder Rename Details ===");
+        _logger.LogInformation("[MR] Current Folder: {Current}", currentFolderName);
+        _logger.LogInformation("[MR] Desired Folder: {Desired}", desiredFolderName);
+        _logger.LogInformation("[MR] Full Current Path: {Path}", movieDirectory);
+        _logger.LogInformation("[MR] Format: {Format}", cfg.MovieFolderFormat);
+        _logger.LogInformation("[MR] Dry Run Mode: {DryRun}", cfg.DryRun);
+
+        _pathRenamer.TryRenameMovieFolder(movie, desiredFolderName, cfg.DryRun);
+
+        _logger.LogInformation("[MR] ===== Movie Processing Complete =====");
+    }
+
+    /// <summary>
     /// Scans the series folder for episode files in the root and moves them to "Season 01".
     /// This is called after a successful series folder rename to ensure episodes are properly organized.
     /// Only processes episodes if they are in the series root AND no season folders already exist.
@@ -445,8 +673,8 @@ public class RenameCoordinator
             if (string.IsNullOrWhiteSpace(seriesPath) || !Directory.Exists(seriesPath))
             {
                 _logger.LogWarning("[MR] SKIP: Cannot process episodes - series path invalid or does not exist. Path: {Path}", seriesPath);
-                return;
-            }
+            return;
+        }
 
             _logger.LogInformation("[MR] Scanning series folder for episode files: {Path}", seriesPath);
 

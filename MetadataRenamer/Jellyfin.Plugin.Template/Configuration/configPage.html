@@ -46,10 +46,17 @@
                     </div>
                     <div class="checkboxContainer checkboxContainer-withDescription">
                         <label class="emby-checkbox-label">
+                            <input id="RenameMovieFolders" name="RenameMovieFolders" type="checkbox" is="emby-checkbox" />
+                            <span>Rename Movie Folders</span>
+                        </label>
+                        <div class="fieldDescription">Enable automatic renaming of movie folders with movie title, year, and metadata provider ID. Only renames the folder, not the movie file itself.</div>
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label">
                             <input id="RequireProviderIdMatch" name="RequireProviderIdMatch" type="checkbox" is="emby-checkbox" />
                             <span>Require Provider ID Match</span>
                         </label>
-                        <div class="fieldDescription">Only rename series that have been matched with a metadata provider (Tvdb, Tmdb, etc.)</div>
+                        <div class="fieldDescription">Only rename items that have been matched with a metadata provider (Tvdb, Tmdb, Imdb, etc.)</div>
                     </div>
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="SeriesFolderFormat">Series Folder Format</label>
@@ -67,9 +74,19 @@
                         <div class="fieldDescription">Format template for episode file names. Supported placeholders: {SeriesName}, {Season}, {Season:00}, {Episode}, {Episode:00}, {Title}, {Year}</div>
                     </div>
                     <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="MovieFolderFormat">Movie Folder Format</label>
+                        <input id="MovieFolderFormat" name="MovieFolderFormat" type="text" is="emby-input" />
+                        <div class="fieldDescription">Format template for movie folder names. Supported placeholders: {Name}, {Year}, {Provider}, {Id}</div>
+                    </div>
+                    <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="PreferredSeriesProviders">Preferred Series Providers</label>
                         <input id="PreferredSeriesProviders" name="PreferredSeriesProviders" type="text" is="emby-input" />
-                        <div class="fieldDescription">Comma-separated list of preferred provider keys in order of preference (e.g., Tvdb, Tmdb, Imdb)</div>
+                        <div class="fieldDescription">Comma-separated list of preferred provider keys in order of preference for series (e.g., Tvdb, Tmdb, Imdb)</div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="PreferredMovieProviders">Preferred Movie Providers</label>
+                        <input id="PreferredMovieProviders" name="PreferredMovieProviders" type="text" is="emby-input" />
+                        <div class="fieldDescription">Comma-separated list of preferred provider keys in order of preference for movies (e.g., Tmdb, Imdb)</div>
                     </div>
                     <div class="checkboxContainer checkboxContainer-withDescription">
                         <label class="emby-checkbox-label">
@@ -112,11 +129,14 @@
                         document.querySelector('#RenameSeriesFolders').checked = config.RenameSeriesFolders !== false;
                         document.querySelector('#RenameSeasonFolders').checked = config.RenameSeasonFolders !== false;
                         document.querySelector('#RenameEpisodeFiles').checked = config.RenameEpisodeFiles !== false;
+                        document.querySelector('#RenameMovieFolders').checked = config.RenameMovieFolders !== false;
                         document.querySelector('#RequireProviderIdMatch').checked = config.RequireProviderIdMatch !== false;
                         document.querySelector('#SeriesFolderFormat').value = config.SeriesFolderFormat || '{Name} ({Year}) [{Provider}-{Id}]';
                         document.querySelector('#SeasonFolderFormat').value = config.SeasonFolderFormat || 'Season {Season:00}';
                         document.querySelector('#EpisodeFileFormat').value = config.EpisodeFileFormat || 'S{Season:00}E{Episode:00} - {Title}';
+                        document.querySelector('#MovieFolderFormat').value = config.MovieFolderFormat || '{Name} ({Year}) [{Provider}-{Id}]';
                         document.querySelector('#PreferredSeriesProviders').value = (config.PreferredSeriesProviders || []).join(', ');
+                        document.querySelector('#PreferredMovieProviders').value = (config.PreferredMovieProviders || []).join(', ');
                         document.querySelector('#OnlyRenameWhenProviderIdsChange').checked = config.OnlyRenameWhenProviderIdsChange !== false;
                         document.querySelector('#ProcessDuringLibraryScans').checked = config.ProcessDuringLibraryScans !== false;
                         document.querySelector('#PerItemCooldownSeconds').value = config.PerItemCooldownSeconds || 60;
@@ -133,12 +153,16 @@
                     config.RenameSeriesFolders = document.querySelector('#RenameSeriesFolders').checked;
                     config.RenameSeasonFolders = document.querySelector('#RenameSeasonFolders').checked;
                     config.RenameEpisodeFiles = document.querySelector('#RenameEpisodeFiles').checked;
+                    config.RenameMovieFolders = document.querySelector('#RenameMovieFolders').checked;
                     config.RequireProviderIdMatch = document.querySelector('#RequireProviderIdMatch').checked;
                     config.SeriesFolderFormat = document.querySelector('#SeriesFolderFormat').value;
                     config.SeasonFolderFormat = document.querySelector('#SeasonFolderFormat').value;
                     config.EpisodeFileFormat = document.querySelector('#EpisodeFileFormat').value;
+                    config.MovieFolderFormat = document.querySelector('#MovieFolderFormat').value;
                     var providersText = document.querySelector('#PreferredSeriesProviders').value;
                     config.PreferredSeriesProviders = providersText ? providersText.split(',').map(function(p) { return p.trim(); }).filter(function(p) { return p.length > 0; }) : [];
+                    var movieProvidersText = document.querySelector('#PreferredMovieProviders').value;
+                    config.PreferredMovieProviders = movieProvidersText ? movieProvidersText.split(',').map(function(p) { return p.trim(); }).filter(function(p) { return p.length > 0; }) : [];
                     config.OnlyRenameWhenProviderIdsChange = document.querySelector('#OnlyRenameWhenProviderIdsChange').checked;
                     config.ProcessDuringLibraryScans = document.querySelector('#ProcessDuringLibraryScans').checked;
                     config.PerItemCooldownSeconds = parseInt(document.querySelector('#PerItemCooldownSeconds').value) || 60;

@@ -21,11 +21,14 @@ public class PluginConfiguration : BasePluginConfiguration
         RenameSeriesFolders = true;
         RenameSeasonFolders = true;
         RenameEpisodeFiles = true;
+        RenameMovieFolders = true;
         RequireProviderIdMatch = true;
         SeriesFolderFormat = "{Name} ({Year}) [{Provider}-{Id}]";
         SeasonFolderFormat = "Season {Season:00}";
         EpisodeFileFormat = "S{Season:00}E{Episode:00} - {Title}";
+        MovieFolderFormat = "{Name} ({Year}) [{Provider}-{Id}]";
         PreferredSeriesProviders = new Collection<string> { "Tvdb", "Tmdb", "Imdb" };
+        PreferredMovieProviders = new Collection<string> { "Tmdb", "Imdb" };
         OnlyRenameWhenProviderIdsChange = true;
         ProcessDuringLibraryScans = true;
         PerItemCooldownSeconds = 60;
@@ -58,6 +61,11 @@ public class PluginConfiguration : BasePluginConfiguration
     public bool RenameEpisodeFiles { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether to rename movie folders.
+    /// </summary>
+    public bool RenameMovieFolders { get; set; }
+
+    /// <summary>
     /// Gets or sets a value indicating whether to require a provider ID match before renaming.
     /// </summary>
     public bool RequireProviderIdMatch { get; set; }
@@ -81,10 +89,22 @@ public class PluginConfiguration : BasePluginConfiguration
     public string EpisodeFileFormat { get; set; }
 
     /// <summary>
-    /// Gets or sets the list of preferred provider keys in order of preference.
+    /// Gets or sets the format string for movie folder names.
+    /// Supported placeholders: {Name}, {Year}, {Provider}, {Id}.
+    /// </summary>
+    public string MovieFolderFormat { get; set; }
+
+    /// <summary>
+    /// Gets or sets the list of preferred provider keys in order of preference for series.
     /// </summary>
     [SuppressMessage("Microsoft.Usage", "CA2227:CollectionPropertiesShouldBeReadOnly", Justification = "Setter required for XML serialization")]
     public Collection<string> PreferredSeriesProviders { get; set; }
+
+    /// <summary>
+    /// Gets or sets the list of preferred provider keys in order of preference for movies.
+    /// </summary>
+    [SuppressMessage("Microsoft.Usage", "CA2227:CollectionPropertiesShouldBeReadOnly", Justification = "Setter required for XML serialization")]
+    public Collection<string> PreferredMovieProviders { get; set; }
 
     /// <summary>
     /// Gets or sets a value indicating whether to only rename when provider IDs change (inferring Identify/refresh just happened).

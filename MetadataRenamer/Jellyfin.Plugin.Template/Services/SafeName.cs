@@ -22,6 +22,34 @@ public static class SafeName
     /// <returns>The formatted and sanitized folder name.</returns>
     public static string RenderSeriesFolder(string format, string name, int? year, string providerLabel, string id)
     {
+        return RenderMovieOrSeriesFolder(format, name, year, providerLabel, id);
+    }
+
+    /// <summary>
+    /// Renders a movie folder name using the specified format template.
+    /// </summary>
+    /// <param name="format">The format template string.</param>
+    /// <param name="name">The movie name.</param>
+    /// <param name="year">The production year (nullable - if null, year part will be removed from format).</param>
+    /// <param name="providerLabel">The provider label (e.g., tmdb, imdb).</param>
+    /// <param name="id">The provider ID.</param>
+    /// <returns>The formatted and sanitized folder name.</returns>
+    public static string RenderMovieFolder(string format, string name, int? year, string providerLabel, string id)
+    {
+        return RenderMovieOrSeriesFolder(format, name, year, providerLabel, id);
+    }
+
+    /// <summary>
+    /// Shared implementation for rendering movie or series folder names.
+    /// </summary>
+    /// <param name="format">The format template string.</param>
+    /// <param name="name">The item name.</param>
+    /// <param name="year">The production year (nullable - if null, year part will be removed from format).</param>
+    /// <param name="providerLabel">The provider label (e.g., tvdb, tmdb, imdb).</param>
+    /// <param name="id">The provider ID.</param>
+    /// <returns>The formatted and sanitized folder name.</returns>
+    private static string RenderMovieOrSeriesFolder(string format, string name, int? year, string providerLabel, string id)
+    {
         var hasProviderId = !string.IsNullOrWhiteSpace(providerLabel) && !string.IsNullOrWhiteSpace(id);
         var hasYear = year.HasValue;
 
@@ -88,10 +116,21 @@ public static class SafeName
         {
             // Handle format specifiers like {Season:00} for zero-padding
             // Use MatchEvaluator to properly capture the padding value
+            // The padding value (e.g., "00" in {Season:00}) represents the minimum width
+            // "00" means pad to at least 2 digits, "000" means pad to at least 3 digits, etc.
             s = Regex.Replace(s, @"{Season:(\d+)}", m =>
             {
-                var padding = int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
-                return seasonNumber.Value.ToString($"D{padding}", CultureInfo.InvariantCulture);
+                var paddingStr = m.Groups[1].Value;
+                // The padding string length tells us the minimum width
+                // "00" has length 2, so pad to 2 digits; "000" has length 3, so pad to 3 digits
+                var paddingWidth = paddingStr.Length;
+                // Ensure minimum padding of 1 to avoid D0 format (which doesn't pad)
+                if (paddingWidth < 1)
+                {
+                    paddingWidth = 1;
+                }
+                // Use the padding width to format the number (e.g., D2 for 2-digit padding)
+                return seasonNumber.Value.ToString($"D{paddingWidth}", CultureInfo.InvariantCulture);
             }, RegexOptions.IgnoreCase);
             s = s.Replace("{Season}", seasonNumber.Value.ToString(CultureInfo.InvariantCulture), StringComparison.OrdinalIgnoreCase);
         }
@@ -126,7 +165,21 @@ public static class SafeName
         if (seasonNumber.HasValue)
         {
             // Handle format specifiers like {Season:00} for zero-padding
-            s = Regex.Replace(s, @"{Season:(\d+)}", seasonNumber.Value.ToString($"D$1", CultureInfo.InvariantCulture), RegexOptions.IgnoreCase);
+            // Use MatchEvaluator to properly capture the padding value
+            s = Regex.Replace(s, @"{Season:(\d+)}", m =>
+            {
+                var paddingStr = m.Groups[1].Value;
+                // The padding string length tells us the minimum width
+                // "00" has length 2, so pad to 2 digits; "000" has length 3, so pad to 3 digits
+                var paddingWidth = paddingStr.Length;
+                // Ensure minimum padding of 1 to avoid D0 format (which doesn't pad)
+                if (paddingWidth < 1)
+                {
+                    paddingWidth = 1;
+                }
+                // Use the padding width to format the number (e.g., D2 for 2-digit padding)
+                return seasonNumber.Value.ToString($"D{paddingWidth}", CultureInfo.InvariantCulture);
+            }, RegexOptions.IgnoreCase);
             s = s.Replace("{Season}", seasonNumber.Value.ToString(CultureInfo.InvariantCulture), StringComparison.OrdinalIgnoreCase);
         }
         else
@@ -142,8 +195,17 @@ public static class SafeName
             // First replace {Episode:XX} patterns (e.g., {Episode:00} -> 09)
             s = Regex.Replace(s, @"{Episode:(\d+)}", m =>
             {
-                var padding = int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
-                return episodeNumber.Value.ToString($"D{padding}", CultureInfo.InvariantCulture);
+                var paddingStr = m.Groups[1].Value;
+                // The padding string length tells us the minimum width
+                // "00" has length 2, so pad to 2 digits; "000" has length 3, so pad to 3 digits
+                var paddingWidth = paddingStr.Length;
+                // Ensure minimum padding of 1 to avoid D0 format (which doesn't pad)
+                if (paddingWidth < 1)
+                {
+                    paddingWidth = 1;
+                }
+                // Use the padding width to format the number (e.g., D2 for 2-digit padding)
+                return episodeNumber.Value.ToString($"D{paddingWidth}", CultureInfo.InvariantCulture);
             }, RegexOptions.IgnoreCase);
             // Then replace simple {Episode} placeholder
             s = s.Replace("{Episode}", episodeNumber.Value.ToString(CultureInfo.InvariantCulture), StringComparison.OrdinalIgnoreCase);
