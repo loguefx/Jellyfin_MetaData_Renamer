@@ -1,26 +1,28 @@
-{
-    "name":  "MetadataRenamer",
-    "owner":  "loguefx",
-    "description":  "MetadataRenamer automatically renames series folders when you identify a series in Jellyfin. It uses the format: {SeriesName} ({Year}) [{provider}-{id}], for example: \u0027The Flash (2014) [tvdb-279121]\u0027. The plugin only renames when provider IDs change (inferring that Identify/refresh just happened), includes safety features like dry-run mode, collision checks, and per-item cooldown periods.",
-    "versions":  [
-                     {
-                         "changelog":  "Automatic series folder renaming on metadata identification",
-                         "version":  "1.0.0.0",
-                         "checksum":  "C1F967633E6A45E4636B666C4A6B79E9",
-                         "timestamp":  "2026-02-05T02:10:38.847Z",
-                         "targetAbi":  "10.10.0.0",
-                         "sourceUrl":  "https://raw.githubusercontent.com/loguefx/Jellyfin_MetaData_Renamer/main/MetadataRenamer/repository/Jellyfin.Plugin.MetadataRenamer.zip"
-                     },
-                     {
-                         "changelog":  "Automatic series folder renaming on metadata identification",
-                         "version":  "1.0.0.0",
-                         "checksum":  "C1F967633E6A45E4636B666C4A6B79E9",
-                         "timestamp":  "2026-02-05T02:10:38.847Z",
-                         "targetAbi":  "10.11.0.0",
-                         "sourceUrl":  "https://raw.githubusercontent.com/loguefx/Jellyfin_MetaData_Renamer/main/MetadataRenamer/repository/Jellyfin.Plugin.MetadataRenamer.zip"
-                     }
-                 ],
-    "category":  "General",
-    "overview":  "Automatically renames series folders to {SeriesName} ({Year}) [{provider}-{id}] format when metadata is identified",
-    "guid":  "eb5d7894-8eef-4b36-aa6f-5d124e828ce1"
-}
+[
+  {
+      "name":  "MetadataRenamer",
+      "owner":  "loguefx",
+      "description":  "MetadataRenamer automatically renames series folders when you identify a series in Jellyfin. It uses the format: {SeriesName} ({Year}) [{provider}-{id}], for example: \u0027The Flash (2014) [tvdb-279121]\u0027. The plugin only renames when provider IDs change (inferring that Identify/refresh just happened), includes safety features like dry-run mode, collision checks, and per-item cooldown periods.",
+      "versions":  [
+                       {
+                           "changelog":  "Automatic series folder renaming on metadata identification",
+                           "version":  "1.0.0.0",
+                           "checksum":  "C1F967633E6A45E4636B666C4A6B79E9",
+                           "timestamp":  "2026-02-05T02:10:38.847Z",
+                           "targetAbi":  "10.10.0.0",
+                           "sourceUrl":  "https://raw.githubusercontent.com/loguefx/Jellyfin_MetaData_Renamer/main/MetadataRenamer/repository/Jellyfin.Plugin.MetadataRenamer.zip"
+                       },
+                       {
+                           "changelog":  "Automatic series folder renaming on metadata identification",
+                           "version":  "1.0.0.0",
+                           "checksum":  "C1F967633E6A45E4636B666C4A6B79E9",
+                           "timestamp":  "2026-02-05T02:10:38.847Z",
+                           "targetAbi":  "10.11.0.0",
+                           "sourceUrl":  "https://raw.githubusercontent.com/loguefx/Jellyfin_MetaData_Renamer/main/MetadataRenamer/repository/Jellyfin.Plugin.MetadataRenamer.zip"
+                       }
+                   ],
+      "category":  "General",
+      "overview":  "Automatically renames series folders to {SeriesName} ({Year}) [{provider}-{id}] format when metadata is identified",
+      "guid":  "eb5d7894-8eef-4b36-aa6f-5d124e828ce1"
+  }
+]
