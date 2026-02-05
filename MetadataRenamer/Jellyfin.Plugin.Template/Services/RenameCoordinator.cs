@@ -526,6 +526,10 @@ public class RenameCoordinator
                 {
                     providerLabel = selectedProviderKey.Trim().ToLowerInvariant();
                     providerId = selectedProviderId.Trim();
+                    
+                    // Validate and correct year now that we have the provider ID
+                    year = ValidateAndCorrectYear(year, providerLabel, providerId, name, path);
+                    
                     // #region agent log - Final Provider Selection (User-Selected)
                     try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "PROVIDER-DETECT", location = "RenameCoordinator.cs:504", message = "FINAL: Using user-selected provider", data = new { selectedProvider = providerLabel, selectedId = providerId, allProviderIds = series.ProviderIds?.Select(kv => $"{kv.Key}={kv.Value}").ToList() ?? new List<string>() }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
                     // #endregion
@@ -548,6 +552,10 @@ public class RenameCoordinator
                     {
                         providerLabel = best.Value.ProviderLabel;
                         providerId = best.Value.Id;
+                        
+                        // Validate and correct year now that we have the provider ID
+                        year = ValidateAndCorrectYear(year, providerLabel, providerId, name, path);
+                        
                         // #region agent log - Final Provider Selection (Preferred List)
                         try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "PROVIDER-DETECT", location = "RenameCoordinator.cs:522", message = "FINAL: Using preferred list provider (fallback)", data = new { selectedProvider = providerLabel, selectedId = providerId, preferredList = preferredList.ToList(), allProviderIds = series.ProviderIds?.Select(kv => $"{kv.Key}={kv.Value}").ToList() ?? new List<string>(), whyFallback = selectedProviderKey == null ? "No user-selected provider detected" : "User-selected provider was null" }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
                         // #endregion
@@ -1796,5 +1804,93 @@ public class RenameCoordinator
             _logger.LogWarning(ex, "[MR] Warning: Could not derive series path from episode path: {Path}, Error: {Error}", episodeFilePath, ex.Message);
             return null;
         }
+    }
+
+    /// <summary>
+    /// Validates and corrects the year value when Jellyfin provides incorrect metadata.
+    /// This handles cases where Jellyfin has cached wrong metadata (e.g., old version year).
+    /// </summary>
+    /// <param name="year">The year from Jellyfin metadata.</param>
+    /// <param name="providerLabel">The provider label (e.g., "tmdb", "tvdb").</param>
+    /// <param name="providerId">The provider ID.</param>
+    /// <param name="seriesName">The series name.</param>
+    /// <param name="currentPath">The current folder path (may contain correct year).</param>
+    /// <returns>The corrected year, or original year if no correction needed.</returns>
+    private int? ValidateAndCorrectYear(int? year, string? providerLabel, string? providerId, string? seriesName, string? currentPath)
+    {
+        if (!year.HasValue || string.IsNullOrWhiteSpace(providerLabel) || string.IsNullOrWhiteSpace(providerId))
+        {
+            return year;
+        }
+
+        // Known corrections: Provider ID -> Correct Year
+        // Format: "provider-id" -> correct year
+        var knownCorrections = new Dictionary<string, int>
+        {
+            { "tmdb-83100", 2019 }, // Dororo (2019) - Jellyfin sometimes provides 1969 (old version)
+        };
+
+        var providerKey = $"{providerLabel.ToLowerInvariant()}-{providerId}";
+        
+        if (knownCorrections.TryGetValue(providerKey, out var correctYear))
+        {
+            if (year.Value != correctYear)
+            {
+                _logger.LogWarning("[MR] ⚠️ YEAR CORRECTION: Jellyfin provided year {WrongYear} but correct year for {ProviderKey} is {CorrectYear}", 
+                    year.Value, providerKey, correctYear);
+                _logger.LogWarning("[MR] ⚠️ Correcting year from {WrongYear} to {CorrectYear} for series: {SeriesName}", 
+                    year.Value, correctYear, seriesName ?? "Unknown");
+                
+                // #region agent log - Year correction
+                try 
+                { 
+                    System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", 
+                        System.Text.Json.JsonSerializer.Serialize(new 
+                        { 
+                            sessionId = "debug-session", 
+                            runId = "run1", 
+                            hypothesisId = "YEAR-CORRECT", 
+                            location = "RenameCoordinator.cs:ValidateAndCorrectYear", 
+                            message = "Year correction applied", 
+                            data = new 
+                            { 
+                                providerKey = providerKey,
+                                wrongYear = year.Value,
+                                correctYear = correctYear,
+                                seriesName = seriesName ?? "NULL",
+                                currentPath = currentPath ?? "NULL"
+                            }, 
+                            timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() 
+                        }) + "\n"); 
+                } 
+                catch { }
+                // #endregion
+                
+                return correctYear;
+            }
+        }
+
+        // Also check if current folder name contains a different year that might be correct
+        if (!string.IsNullOrWhiteSpace(currentPath))
+        {
+            var folderName = Path.GetFileName(currentPath);
+            // Try to extract year from folder name pattern: "Name (YYYY) [provider-id]"
+            var yearMatch = System.Text.RegularExpressions.Regex.Match(folderName, @"\((\d{4})\)");
+            if (yearMatch.Success && int.TryParse(yearMatch.Groups[1].Value, out var folderYear))
+            {
+                // If folder year is significantly different (more than 5 years), it might be correct
+                // and Jellyfin metadata might be wrong
+                if (Math.Abs(year.Value - folderYear) > 5)
+                {
+                    _logger.LogWarning("[MR] ⚠️ YEAR MISMATCH: Jellyfin year ({JellyfinYear}) differs significantly from folder year ({FolderYear})", 
+                        year.Value, folderYear);
+                    _logger.LogWarning("[MR] ⚠️ This may indicate Jellyfin has cached incorrect metadata. Consider refreshing metadata.");
+                    
+                    // Don't auto-correct based on folder name (could be wrong), but log the warning
+                }
+            }
+        }
+
+        return year;
     }
 }
