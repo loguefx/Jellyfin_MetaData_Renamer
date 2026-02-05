@@ -304,6 +304,21 @@ public class RenameCoordinator
                 yearSource = "PremiereDate";
             }
 
+            // #region agent log - Year detection
+            try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "YEAR-DETECT", location = "RenameCoordinator.cs:297", message = "Year detection from metadata", data = new { seriesId = series.Id.ToString(), seriesName = name ?? "NULL", productionYear = series.ProductionYear?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", premiereDate = series.PremiereDate?.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", premiereDateYear = series.PremiereDate?.Year.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", finalYear = year?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", yearSource = yearSource, currentFolderPath = path, currentFolderName = Path.GetFileName(path) }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+            // #endregion
+
+            _logger.LogInformation("[MR] === Year Detection from Metadata ===");
+            _logger.LogInformation("[MR] Series: {Name}, ID: {Id}", name ?? "NULL", series.Id);
+            _logger.LogInformation("[MR] ProductionYear (from Jellyfin): {ProductionYear}", 
+                series.ProductionYear?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+            _logger.LogInformation("[MR] PremiereDate (from Jellyfin): {PremiereDate}, Year: {PremiereDateYear}", 
+                series.PremiereDate?.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                series.PremiereDate?.Year.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+            _logger.LogInformation("[MR] Final Year Selected: {FinalYear} (Source: {YearSource})", 
+                year?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                yearSource);
+            _logger.LogInformation("[MR] Current Folder Name: {CurrentFolderName}", Path.GetFileName(path));
             _logger.LogInformation("[MR] Series metadata: Name={Name}, Year={Year} (from {YearSource}), ProviderIds={ProviderIds}",
                 name ?? "NULL", 
                 year?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", 
@@ -584,6 +599,20 @@ public class RenameCoordinator
 
             // Build final desired folder name: Name (Year) [provider-id] or Name (Year) if no provider IDs
             var currentFolderName = Path.GetFileName(path);
+            
+            // #region agent log - Before folder name generation
+            try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "YEAR-DETECT", location = "RenameCoordinator.cs:594", message = "Before folder name generation", data = new { seriesName = name, year = year?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", yearSource = yearSource, providerLabel = providerLabel ?? "NULL", providerId = providerId ?? "NULL", currentFolderName = currentFolderName, format = cfg.SeriesFolderFormat, productionYear = series.ProductionYear?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", premiereDate = series.PremiereDate?.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture) ?? "NULL" }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+            // #endregion
+            
+            _logger.LogInformation("[MR] === Folder Name Generation ===");
+            _logger.LogInformation("[MR] Format: {Format}", cfg.SeriesFolderFormat);
+            _logger.LogInformation("[MR] Values: Name={Name}, Year={Year} (Source: {YearSource}), Provider={Provider}, ID={Id}", 
+                name ?? "NULL",
+                year?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                yearSource,
+                providerLabel ?? "NULL",
+                providerId ?? "NULL");
+            
             var desiredFolderName = SafeName.RenderSeriesFolder(
                 cfg.SeriesFolderFormat,
                 name,
@@ -592,16 +621,14 @@ public class RenameCoordinator
                 providerId);
             
             // #region agent log - Final Folder Name Generation
-            try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "PROVIDER-DETECT", location = "RenameCoordinator.cs:540", message = "Final folder name generation", data = new { seriesName = name, year = year?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", providerLabel = providerLabel ?? "NULL", providerId = providerId ?? "NULL", currentFolderName = currentFolderName, desiredFolderName = desiredFolderName, format = cfg.SeriesFolderFormat }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+            try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "PROVIDER-DETECT", location = "RenameCoordinator.cs:604", message = "Final folder name generation", data = new { seriesName = name, year = year?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", providerLabel = providerLabel ?? "NULL", providerId = providerId ?? "NULL", currentFolderName = currentFolderName, desiredFolderName = desiredFolderName, format = cfg.SeriesFolderFormat }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
             // #endregion
             
-            _logger.LogInformation("[MR] Desired folder name: {DesiredName} (year available: {HasYear})", desiredFolderName, year.HasValue);
+            _logger.LogInformation("[MR] Current Folder Name: {Current}", currentFolderName);
+            _logger.LogInformation("[MR] Desired Folder Name: {Desired}", desiredFolderName);
+            _logger.LogInformation("[MR] Year Available: {HasYear}", year.HasValue);
 
-            _logger.LogInformation("[MR] === Folder Rename Details ===");
-            _logger.LogInformation("[MR] Current Folder: {Current}", currentFolderName);
-            _logger.LogInformation("[MR] Desired Folder: {Desired}", desiredFolderName);
             _logger.LogInformation("[MR] Full Current Path: {Path}", path);
-            _logger.LogInformation("[MR] Format: {Format}", cfg.SeriesFolderFormat);
             _logger.LogInformation("[MR] Dry Run Mode: {DryRun}", cfg.DryRun);
 
             // #region agent log
