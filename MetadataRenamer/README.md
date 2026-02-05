@@ -208,7 +208,7 @@ Access plugin settings: **Dashboard** > **Plugins** > **MetadataRenamer**
 | **Season Folder Format** | `Season {Season:00}` | Customize season folder naming format |
 | **Episode File Format** | `S{Season:00}E{Episode:00} - {Title}` | Customize episode file naming format |
 | **Movie Folder Format** | `{Name} ({Year}) [{Provider}-{Id}]` | Customize movie folder naming format |
-| **Preferred Series Providers** | `Tvdb, Tmdb, Imdb` | Order of provider preference for series |
+| **Preferred Series Providers** | `Tmdb, Tvdb, Imdb` | Order of provider preference for series (TMDB prioritized by default) |
 | **Preferred Movie Providers** | `Tmdb, Imdb` | Order of provider preference for movies |
 | **Per-Item Cooldown (seconds)** | `60` | Cooldown between rename attempts |
 
@@ -433,6 +433,8 @@ Look for log entries prefixed with `[MR]`:
    - Example: `Dororo (2019) [tmdb-83100]` (correct) vs `Dororo and Hyakkimaru [old-id]` (wrong)
 
 **Note:** The plugin uses whatever provider IDs Jellyfin assigns after you select a match. If you select the wrong match in Jellyfin's "Identify" screen, the plugin will use those incorrect IDs. Always verify you're selecting the correct entry (check year, description, and poster) before confirming.
+
+**Important:** Jellyfin may assign multiple provider IDs (e.g., both TVDB and TMDB) even when you select a single match. The plugin uses the "Preferred Series Providers" setting to determine which ID to use. By default, TMDB is prioritized over TVDB. If you're getting the wrong ID, check your plugin settings and adjust the provider preference order.
 
 ### Movie Folders Not Renaming
 

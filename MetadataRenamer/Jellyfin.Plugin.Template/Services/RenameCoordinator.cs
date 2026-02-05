@@ -413,7 +413,18 @@ public class RenameCoordinator
                 {
                     providerLabel = best.Value.ProviderLabel;
                     providerId = best.Value.Id;
-                    _logger.LogInformation("[MR] Selected Provider: {Provider}={Id}", providerLabel, providerId);
+                    _logger.LogInformation("[MR] === Provider Selection ===");
+                    _logger.LogInformation("[MR] Selected Provider: {Provider}={Id} (from preferred list: {PreferredList})", 
+                        providerLabel, providerId, string.Join(", ", preferredList));
+                    
+                    // Warn if multiple provider IDs exist - might indicate conflicting matches
+                    if (series.ProviderIds.Count > 1)
+                    {
+                        _logger.LogWarning("[MR] ⚠️ WARNING: Multiple provider IDs detected ({Count}). Selected: {SelectedProvider}={SelectedId}", 
+                            series.ProviderIds.Count, providerLabel, providerId);
+                        _logger.LogWarning("[MR] ⚠️ If the wrong ID was selected, check your 'Preferred Series Providers' setting in plugin configuration.");
+                        _logger.LogWarning("[MR] ⚠️ Current preference order: {Order}", string.Join(" > ", preferredList));
+                    }
                 }
                 else
                 {
@@ -650,7 +661,18 @@ public class RenameCoordinator
             {
                 providerLabel = best.Value.ProviderLabel;
                 providerId = best.Value.Id;
-                _logger.LogInformation("[MR] Selected Provider: {Provider}={Id}", providerLabel, providerId);
+                _logger.LogInformation("[MR] === Provider Selection (Movie) ===");
+                _logger.LogInformation("[MR] Selected Provider: {Provider}={Id} (from preferred list: {PreferredList})", 
+                    providerLabel, providerId, string.Join(", ", preferredList));
+                
+                // Warn if multiple provider IDs exist - might indicate conflicting matches
+                if (movie.ProviderIds.Count > 1)
+                {
+                    _logger.LogWarning("[MR] ⚠️ WARNING: Multiple provider IDs detected ({Count}). Selected: {SelectedProvider}={SelectedId}", 
+                        movie.ProviderIds.Count, providerLabel, providerId);
+                    _logger.LogWarning("[MR] ⚠️ If the wrong ID was selected, check your 'Preferred Movie Providers' setting in plugin configuration.");
+                    _logger.LogWarning("[MR] ⚠️ Current preference order: {Order}", string.Join(" > ", preferredList));
+                }
             }
             else
             {
