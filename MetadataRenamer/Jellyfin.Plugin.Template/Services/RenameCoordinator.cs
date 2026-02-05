@@ -412,6 +412,12 @@ public class RenameCoordinator
                 {
                     // Compare old vs new to find what changed
                     _logger.LogInformation("[MR] === Detecting User-Selected Provider (Identify) ===");
+                    _logger.LogInformation("[MR] Previous Provider IDs: {Previous}", 
+                        previousProviderIds.Count > 0 
+                            ? string.Join(", ", previousProviderIds.Select(kv => $"{kv.Key}={kv.Value}"))
+                            : "NONE");
+                    _logger.LogInformation("[MR] Current Provider IDs: {Current}", 
+                        string.Join(", ", series.ProviderIds.Select(kv => $"{kv.Key}={kv.Value}")));
                     
                     foreach (var kv in series.ProviderIds)
                     {
@@ -419,19 +425,30 @@ public class RenameCoordinator
                         var providerValue = kv.Value;
                         
                         // Check if this provider ID is new or changed
-                        if (!previousProviderIds.TryGetValue(providerKey, out var oldValue) || oldValue != providerValue)
+                        if (!previousProviderIds.TryGetValue(providerKey, out var oldValue))
                         {
+                            // New provider ID
                             selectedProviderKey = providerKey;
                             selectedProviderId = providerValue;
-                            _logger.LogInformation("[MR] ✓ Detected newly added/changed provider: {Provider}={Id} (user selected this in Identify)", 
+                            _logger.LogInformation("[MR] ✓ Detected NEW provider: {Provider}={Id} (user selected this in Identify)", 
                                 providerKey, providerValue);
+                            break; // Use the first new provider as the selected one
+                        }
+                        else if (oldValue != providerValue)
+                        {
+                            // Changed provider ID
+                            selectedProviderKey = providerKey;
+                            selectedProviderId = providerValue;
+                            _logger.LogInformation("[MR] ✓ Detected CHANGED provider: {Provider}={OldId} -> {NewId} (user selected this in Identify)", 
+                                providerKey, oldValue, providerValue);
                             break; // Use the first changed provider as the selected one
                         }
                     }
                     
                     if (selectedProviderKey == null)
                     {
-                        _logger.LogInformation("[MR] No newly added/changed provider detected (all IDs were already present)");
+                        _logger.LogWarning("[MR] ⚠️ No newly added/changed provider detected (all IDs were already present). This may indicate the wrong match was selected.");
+                        _logger.LogWarning("[MR] ⚠️ If you selected a different match in Identify, you may need to clear the series metadata first, then re-identify.");
                     }
                 }
                 else if (isFirstTime)
@@ -859,20 +876,117 @@ public class RenameCoordinator
             _logger.LogInformation("[MR] Scanning series folder for episode files: {Path}", seriesPath);
 
             // Check if season folders already exist (don't interfere with existing structure)
-            var seasonPattern = new System.Text.RegularExpressions.Regex(
+            // Pattern 1: Standard season folders (Season 1, Season 01, S1, etc.)
+            var standardSeasonPattern = new System.Text.RegularExpressions.Regex(
                 @"^(Season\s*\d+|S\d+|Season\s*\d{2,})$",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            
+            // Pattern 2: Folders containing "Season" or "S" followed by a number (e.g., "Dororo - Season 1")
+            var containsSeasonPattern = new System.Text.RegularExpressions.Regex(
+                @".*\b(Season|S)\s*\d+.*",
                 System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
             var subdirectories = Directory.GetDirectories(seriesPath);
-            var hasSeasonFolders = subdirectories.Any(dir =>
+            var seasonFolders = new List<string>();
+            var nonSeasonFolders = new List<string>();
+            
+            foreach (var dir in subdirectories)
             {
                 var dirName = Path.GetFileName(dir);
-                return seasonPattern.IsMatch(dirName);
-            });
+                if (standardSeasonPattern.IsMatch(dirName) || containsSeasonPattern.IsMatch(dirName))
+                {
+                    seasonFolders.Add(dir);
+                    _logger.LogInformation("[MR] Detected season folder: {FolderName}", dirName);
+                }
+                else
+                {
+                    nonSeasonFolders.Add(dir);
+                }
+            }
 
-            if (hasSeasonFolders)
+            if (seasonFolders.Count > 0)
             {
-                _logger.LogInformation("[MR] Series already has season folders. Skipping episode organization - episodes are already structured correctly.");
+                _logger.LogInformation("[MR] Series already has {Count} season folder(s). Checking if they need to be renamed...", seasonFolders.Count);
+                
+                // Check if any season folders need to be renamed to match the format
+                var desiredSeason1Name = SafeName.RenderSeasonFolder(cfg.SeasonFolderFormat, 1, null);
+                var desiredSeason1Path = Path.Combine(seriesPath, desiredSeason1Name);
+                
+                foreach (var seasonFolder in seasonFolders)
+                {
+                    var seasonFolderName = Path.GetFileName(seasonFolder);
+                    
+                    // If this looks like Season 1 but has a different name, check if we should rename it
+                    if (containsSeasonPattern.IsMatch(seasonFolderName) && 
+                        !standardSeasonPattern.IsMatch(seasonFolderName) &&
+                        System.Text.RegularExpressions.Regex.IsMatch(seasonFolderName, @"\b(Season|S)\s*1\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                    {
+                        // This is a Season 1 folder with a non-standard name (e.g., "Dororo - Season 1")
+                        // Check if there's a nested "Season 01" folder inside it
+                        var nestedSeason01Path = Path.Combine(seasonFolder, desiredSeason1Name);
+                        if (Directory.Exists(nestedSeason01Path))
+                        {
+                            _logger.LogInformation("[MR] Found nested '{DesiredName}' folder inside '{CurrentName}'. Moving episodes up and removing nested folder...", 
+                                desiredSeason1Name, seasonFolderName);
+                            
+                            // Move all files from nested "Season 01" to the parent season folder
+                            var nestedFiles = Directory.GetFiles(nestedSeason01Path);
+                            foreach (var file in nestedFiles)
+                            {
+                                var fileName = Path.GetFileName(file);
+                                var targetPath = Path.Combine(seasonFolder, fileName);
+                                
+                                if (File.Exists(targetPath))
+                                {
+                                    _logger.LogWarning("[MR] SKIP: Target file already exists. File: {FileName}", fileName);
+                                    continue;
+                                }
+                                
+                                try
+                                {
+                                    File.Move(file, targetPath);
+                                    _logger.LogInformation("[MR] ✓ Moved episode from nested folder: {FileName}", fileName);
+                                }
+                                catch (Exception ex)
+                                {
+                                    _logger.LogError(ex, "[MR] ERROR: Failed to move file. File: {FileName}, Error: {Error}", fileName, ex.Message);
+                                }
+                            }
+                            
+                            // Remove the nested "Season 01" folder if it's empty
+                            try
+                            {
+                                if (Directory.GetFiles(nestedSeason01Path).Length == 0 && 
+                                    Directory.GetDirectories(nestedSeason01Path).Length == 0)
+                                {
+                                    Directory.Delete(nestedSeason01Path);
+                                    _logger.LogInformation("[MR] ✓ Removed empty nested folder: {Path}", nestedSeason01Path);
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogWarning(ex, "[MR] Could not remove nested folder (may not be empty): {Path}", nestedSeason01Path);
+                            }
+                        }
+                        
+                        // Rename the season folder to match the desired format
+                        if (!string.Equals(seasonFolderName, desiredSeason1Name, StringComparison.OrdinalIgnoreCase))
+                        {
+                            try
+                            {
+                                Directory.Move(seasonFolder, desiredSeason1Path);
+                                _logger.LogInformation("[MR] ✓ Renamed season folder: '{OldName}' -> '{NewName}'", seasonFolderName, desiredSeason1Name);
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogError(ex, "[MR] ERROR: Failed to rename season folder. Old: {OldName}, New: {NewName}, Error: {Error}", 
+                                    seasonFolderName, desiredSeason1Name, ex.Message);
+                            }
+                        }
+                    }
+                }
+                
+                _logger.LogInformation("[MR] Season folders detected and processed. Skipping episode organization - episodes are already structured correctly.");
                 return;
             }
 
