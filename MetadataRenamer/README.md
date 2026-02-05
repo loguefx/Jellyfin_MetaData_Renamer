@@ -408,6 +408,32 @@ Look for log entries prefixed with `[MR]`:
 3. **Perform a full library scan** - Go to Dashboard > Libraries > Select your library > Scan Library (Full)
 4. **Check logs** - Look for `[MR] ProcessDuringLibraryScans` entries to see if the setting is being applied
 
+### Wrong Metadata Match Selected (e.g., Old vs New Series)
+
+**Issue:** When using "Identify", you selected the wrong match (e.g., old "Dororo and Hyakkimaru" instead of new "Dororo (2019)").
+
+**Solution:**
+1. **Re-identify with the correct match:**
+   - Go to the series/movie in Jellyfin
+   - Click the **three dots** (⋮) menu
+   - Select **"Identify"**
+   - **Search for the correct entry** (e.g., "Dororo 2019" or "Dororo TV")
+   - **Select the correct match** (check the year and description)
+   - Click **"OK"** or **"Save"**
+
+2. **Verify provider IDs in logs:**
+   - After re-identifying, check Jellyfin logs
+   - Look for `[MR] === Provider IDs Details ===` entries
+   - Verify the provider IDs match the correct entry:
+     - **Dororo (2019)**: Should have `Tmdb=83100` (or similar)
+     - **Old Dororo**: Will have different IDs
+
+3. **Check the folder name:**
+   - After re-identifying, the folder should rename to match the correct metadata
+   - Example: `Dororo (2019) [tmdb-83100]` (correct) vs `Dororo and Hyakkimaru [old-id]` (wrong)
+
+**Note:** The plugin uses whatever provider IDs Jellyfin assigns after you select a match. If you select the wrong match in Jellyfin's "Identify" screen, the plugin will use those incorrect IDs. Always verify you're selecting the correct entry (check year, description, and poster) before confirming.
+
 ### Movie Folders Not Renaming
 
 1. **Check "Rename Movie Folders" setting** - Go to plugin settings and verify "Rename Movie Folders" is enabled

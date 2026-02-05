@@ -256,13 +256,28 @@ public class RenameCoordinator
 
             _logger.LogInformation("[MR] Series path verified: {Path}", path);
 
-            // Check provider IDs
+            // Check provider IDs - log ALL provider IDs in detail for debugging
             var providerIdsCount = series.ProviderIds?.Count ?? 0;
             var providerIdsString = series.ProviderIds != null 
                 ? string.Join(", ", series.ProviderIds.Select(kv => $"{kv.Key}={kv.Value}")) 
                 : "NONE";
             
-            _logger.LogInformation("[MR] Provider IDs: Count={Count}, Values={Values}", providerIdsCount, providerIdsString);
+            _logger.LogInformation("[MR] === Provider IDs Details ===");
+            _logger.LogInformation("[MR] Provider IDs Count: {Count}", providerIdsCount);
+            _logger.LogInformation("[MR] All Provider IDs: {Values}", providerIdsString);
+            
+            // Log each provider ID individually for clarity
+            if (series.ProviderIds != null && series.ProviderIds.Count > 0)
+            {
+                foreach (var kv in series.ProviderIds)
+                {
+                    _logger.LogInformation("[MR]   - {Provider}: {Id}", kv.Key, kv.Value ?? "NULL");
+                }
+            }
+            else
+            {
+                _logger.LogWarning("[MR]   - No provider IDs found!");
+            }
 
         // Must be matched
         if (cfg.RequireProviderIdMatch)
@@ -496,13 +511,28 @@ public class RenameCoordinator
 
         _logger.LogInformation("[MR] Movie directory verified: {Path}", movieDirectory);
 
-        // Check provider IDs
+        // Check provider IDs - log ALL provider IDs in detail for debugging
         var providerIdsCount = movie.ProviderIds?.Count ?? 0;
         var providerIdsString = movie.ProviderIds != null
             ? string.Join(", ", movie.ProviderIds.Select(kv => $"{kv.Key}={kv.Value}"))
             : "NONE";
 
-        _logger.LogInformation("[MR] Provider IDs: Count={Count}, Values={Values}", providerIdsCount, providerIdsString);
+        _logger.LogInformation("[MR] === Provider IDs Details (Movie) ===");
+        _logger.LogInformation("[MR] Provider IDs Count: {Count}", providerIdsCount);
+        _logger.LogInformation("[MR] All Provider IDs: {Values}", providerIdsString);
+        
+        // Log each provider ID individually for clarity
+        if (movie.ProviderIds != null && movie.ProviderIds.Count > 0)
+        {
+            foreach (var kv in movie.ProviderIds)
+            {
+                _logger.LogInformation("[MR]   - {Provider}: {Id}", kv.Key, kv.Value ?? "NULL");
+            }
+        }
+        else
+        {
+            _logger.LogWarning("[MR]   - No provider IDs found!");
+        }
 
         // Must be matched
         if (cfg.RequireProviderIdMatch)
