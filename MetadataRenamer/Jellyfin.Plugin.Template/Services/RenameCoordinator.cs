@@ -308,14 +308,14 @@ public class RenameCoordinator
             try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "YEAR-DETECT", location = "RenameCoordinator.cs:297", message = "Year detection from metadata", data = new { seriesId = series.Id.ToString(), seriesName = name ?? "NULL", productionYear = series.ProductionYear?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", premiereDate = series.PremiereDate?.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", premiereDateYear = series.PremiereDate?.Year.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", finalYear = year?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", yearSource = yearSource, currentFolderPath = path, currentFolderName = Path.GetFileName(path) }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
             // #endregion
 
-            _logger.LogInformation("[MR] === Year Detection from Metadata ===");
+            _logger.LogInformation("[MR] === Year Detection from Metadata (BEFORE Correction) ===");
             _logger.LogInformation("[MR] Series: {Name}, ID: {Id}", name ?? "NULL", series.Id);
             _logger.LogInformation("[MR] ProductionYear (from Jellyfin): {ProductionYear}", 
                 series.ProductionYear?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
             _logger.LogInformation("[MR] PremiereDate (from Jellyfin): {PremiereDate}, Year: {PremiereDateYear}", 
                 series.PremiereDate?.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
                 series.PremiereDate?.Year.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
-            _logger.LogInformation("[MR] Final Year Selected: {FinalYear} (Source: {YearSource})", 
+            _logger.LogInformation("[MR] Year from Metadata (BEFORE correction): {Year} (Source: {YearSource})", 
                 year?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
                 yearSource);
             _logger.LogInformation("[MR] Current Folder Name: {CurrentFolderName}", Path.GetFileName(path));
@@ -527,8 +527,21 @@ public class RenameCoordinator
                     providerLabel = selectedProviderKey.Trim().ToLowerInvariant();
                     providerId = selectedProviderId.Trim();
                     
+                    // Log year before correction
+                    var yearBeforeCorrection = year;
+                    
                     // Validate and correct year now that we have the provider ID
                     year = ValidateAndCorrectYear(year, providerLabel, providerId, name, path);
+                    
+                    // Log year after correction
+                    if (yearBeforeCorrection != year)
+                    {
+                        _logger.LogInformation("[MR] === Year Correction Applied ===");
+                        _logger.LogInformation("[MR] Year BEFORE correction: {BeforeYear}", 
+                            yearBeforeCorrection?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+                        _logger.LogInformation("[MR] Year AFTER correction: {AfterYear}", 
+                            year?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+                    }
                     
                     // #region agent log - Final Provider Selection (User-Selected)
                     try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "PROVIDER-DETECT", location = "RenameCoordinator.cs:504", message = "FINAL: Using user-selected provider", data = new { selectedProvider = providerLabel, selectedId = providerId, allProviderIds = series.ProviderIds?.Select(kv => $"{kv.Key}={kv.Value}").ToList() ?? new List<string>() }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
@@ -553,8 +566,21 @@ public class RenameCoordinator
                         providerLabel = best.Value.ProviderLabel;
                         providerId = best.Value.Id;
                         
+                        // Log year before correction
+                        var yearBeforeCorrection = year;
+                        
                         // Validate and correct year now that we have the provider ID
                         year = ValidateAndCorrectYear(year, providerLabel, providerId, name, path);
+                        
+                        // Log year after correction
+                        if (yearBeforeCorrection != year)
+                        {
+                            _logger.LogInformation("[MR] === Year Correction Applied ===");
+                            _logger.LogInformation("[MR] Year BEFORE correction: {BeforeYear}", 
+                                yearBeforeCorrection?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+                            _logger.LogInformation("[MR] Year AFTER correction: {AfterYear}", 
+                                year?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+                        }
                         
                         // #region agent log - Final Provider Selection (Preferred List)
                         try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "PROVIDER-DETECT", location = "RenameCoordinator.cs:522", message = "FINAL: Using preferred list provider (fallback)", data = new { selectedProvider = providerLabel, selectedId = providerId, preferredList = preferredList.ToList(), allProviderIds = series.ProviderIds?.Select(kv => $"{kv.Key}={kv.Value}").ToList() ?? new List<string>(), whyFallback = selectedProviderKey == null ? "No user-selected provider detected" : "User-selected provider was null" }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
@@ -614,10 +640,12 @@ public class RenameCoordinator
             
             _logger.LogInformation("[MR] === Folder Name Generation ===");
             _logger.LogInformation("[MR] Format: {Format}", cfg.SeriesFolderFormat);
-            _logger.LogInformation("[MR] Values: Name={Name}, Year={Year} (Source: {YearSource}), Provider={Provider}, ID={Id}", 
+            _logger.LogInformation("[MR] FINAL Year (AFTER correction): {Year} (Original Source: {YearSource})", 
+                year?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                yearSource);
+            _logger.LogInformation("[MR] Values: Name={Name}, Year={Year}, Provider={Provider}, ID={Id}", 
                 name ?? "NULL",
                 year?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
-                yearSource,
                 providerLabel ?? "NULL",
                 providerId ?? "NULL");
             
@@ -745,6 +773,16 @@ public class RenameCoordinator
             yearSource = "PremiereDate";
         }
 
+        _logger.LogInformation("[MR] === Year Detection from Metadata (BEFORE Correction - Movie) ===");
+        _logger.LogInformation("[MR] Movie: {Name}, ID: {Id}", name ?? "NULL", movie.Id);
+        _logger.LogInformation("[MR] ProductionYear (from Jellyfin): {ProductionYear}", 
+            movie.ProductionYear?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+        _logger.LogInformation("[MR] PremiereDate (from Jellyfin): {PremiereDate}, Year: {PremiereDateYear}", 
+            movie.PremiereDate?.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+            movie.PremiereDate?.Year.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+        _logger.LogInformation("[MR] Year from Metadata (BEFORE correction): {Year} (Source: {YearSource})", 
+            year?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+            yearSource);
         _logger.LogInformation("[MR] Movie metadata: Name={Name}, Year={Year} (from {YearSource}), ProviderIds={ProviderIds}",
             name ?? "NULL",
             year?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
@@ -867,6 +905,23 @@ public class RenameCoordinator
             {
                 providerLabel = selectedProviderKey.Trim().ToLowerInvariant();
                 providerId = selectedProviderId.Trim();
+                
+                // Log year before correction
+                var yearBeforeCorrection = year;
+                
+                // Validate and correct year now that we have the provider ID
+                year = ValidateAndCorrectYear(year, providerLabel, providerId, name, movieDirectory);
+                
+                // Log year after correction
+                if (yearBeforeCorrection != year)
+                {
+                    _logger.LogInformation("[MR] === Year Correction Applied (Movie) ===");
+                    _logger.LogInformation("[MR] Year BEFORE correction: {BeforeYear}", 
+                        yearBeforeCorrection?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+                    _logger.LogInformation("[MR] Year AFTER correction: {AfterYear}", 
+                        year?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+                }
+                
                 _logger.LogInformation("[MR] === Provider Selection (User-Selected - Movie) ===");
                 _logger.LogInformation("[MR] Using user-selected provider from Identify: {Provider}={Id}", providerLabel, providerId);
             }
@@ -886,6 +941,23 @@ public class RenameCoordinator
                 {
                     providerLabel = best.Value.ProviderLabel;
                     providerId = best.Value.Id;
+                    
+                    // Log year before correction
+                    var yearBeforeCorrection = year;
+                    
+                    // Validate and correct year now that we have the provider ID
+                    year = ValidateAndCorrectYear(year, providerLabel, providerId, name, movieDirectory);
+                    
+                    // Log year after correction
+                    if (yearBeforeCorrection != year)
+                    {
+                        _logger.LogInformation("[MR] === Year Correction Applied (Movie) ===");
+                        _logger.LogInformation("[MR] Year BEFORE correction: {BeforeYear}", 
+                            yearBeforeCorrection?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+                        _logger.LogInformation("[MR] Year AFTER correction: {AfterYear}", 
+                            year?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+                    }
+                    
                     _logger.LogInformation("[MR] === Provider Selection (Preferred List - Movie) ===");
                     _logger.LogInformation("[MR] Selected Provider: {Provider}={Id} (from preferred list: {PreferredList})", 
                         providerLabel, providerId, string.Join(", ", preferredList));
@@ -932,6 +1004,18 @@ public class RenameCoordinator
 
         // Build final desired folder name: Name (Year) [provider-id] or Name (Year) if no provider IDs
         var currentFolderName = Path.GetFileName(movieDirectory);
+        
+        _logger.LogInformation("[MR] === Folder Name Generation (Movie) ===");
+        _logger.LogInformation("[MR] Format: {Format}", cfg.MovieFolderFormat);
+        _logger.LogInformation("[MR] FINAL Year (AFTER correction): {Year} (Original Source: {YearSource})", 
+            year?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+            yearSource);
+        _logger.LogInformation("[MR] Values: Name={Name}, Year={Year}, Provider={Provider}, ID={Id}", 
+            name ?? "NULL",
+            year?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+            providerLabel ?? "NULL",
+            providerId ?? "NULL");
+        
         var desiredFolderName = SafeName.RenderMovieFolder(
             cfg.MovieFolderFormat,
             name,
