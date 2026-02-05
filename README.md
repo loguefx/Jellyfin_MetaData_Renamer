@@ -1,6 +1,6 @@
 # MetadataRenamer - Jellyfin Plugin
 
-Automatically renames series folders, season folders, and episode files when metadata is identified in Jellyfin, using metadata from providers like TVDB, TMDB, and IMDB.
+Automatically renames series folders, season folders, episode files, and movie folders when metadata is identified in Jellyfin, using metadata from providers like TVDB, TMDB, and IMDB.
 
 ## ⚠️ Important: Library Scan Required for Episode Renaming
 
@@ -31,6 +31,11 @@ Automatically renames series folders, season folders, and episode files when met
 - `S01E01 - Pilot.mp4`
 - `S02E05 - The Darkness and the Light.mp4`
 - `E09 - Episode Title.mp4` (for flat structures without season folders)
+
+### Movie Folders
+- `The Matrix (1999) [tmdb-603]`
+- `Inception (2010) [tmdb-27205]`
+- `The Dark Knight (2008) [imdb-tt0468569]`
 
 ## Installation
 
@@ -67,6 +72,7 @@ MetadataRenamer listens to Jellyfin's library update events and automatically re
 - **Series folders** - When metadata is identified or changed
 - **Season folders** - When season metadata is available
 - **Episode files** - Using episode numbers and titles from metadata
+- **Movie folders** - When metadata is identified or changed (movie files are not touched)
 
 The plugin uses smart detection to only rename when it's safe to do so, and validates episode numbers to prevent incorrect renames.
 
@@ -91,6 +97,16 @@ The plugin will **rename episode files** when:
 
 **Note:** Episode renaming requires a library scan to trigger. After identifying a series, perform a library scan to rename episode files. If "Process During Library Scans" is enabled, full library scans will automatically update all episode files to match metadata.
 
+#### Movie Folders
+The plugin will **rename movie folders** when:
+
+1. ✅ **Movie renaming is enabled** in plugin settings
+2. ✅ **Movie has valid metadata** (name and year from Jellyfin)
+3. ✅ **Movie has at least one Provider ID** (Tmdb, Imdb, etc.) if `RequireProviderIdMatch` is enabled
+4. ✅ **Provider IDs have changed** (if `OnlyRenameWhenProviderIdsChange` is enabled) **OR** "Process During Library Scans" is enabled
+
+**Note:** Movie folders are renamed, but the movie file itself is never touched. The plugin only renames the folder containing the movie file.
+
 ### Key Feature: Smart Detection
 
 **Default Setting: `OnlyRenameWhenProviderIdsChange = true`**
@@ -104,12 +120,13 @@ This is the "smart detection" feature that prevents unnecessary renames:
 ### Real-World Scenarios
 
 #### ✅ Scenario 1: New Library Scan (ProcessDuringLibraryScans Enabled)
-1. You add a new library with series folders
-2. Jellyfin scans and automatically matches some series
+1. You add a new library with series folders and movie folders
+2. Jellyfin scans and automatically matches some series and movies
 3. **Result:** 
-   - Plugin detects provider ID changes → Renames series folders to proper format
-   - If "Process During Library Scans" is enabled → All series folders, season folders, and episode files are updated to match metadata during the scan
+   - Plugin detects provider ID changes → Renames series folders and movie folders to proper format
+   - If "Process During Library Scans" is enabled → All series folders, season folders, episode files, and movie folders are updated to match metadata during the scan
    - Episode files are renamed using metadata (if episode renaming is enabled)
+   - Movie folders are renamed with title, year, and provider ID (movie files are not touched)
 
 #### ✅ Scenario 2: Manual Identify with Episode Renaming
 1. You have a series "The Flash" that's not matched
@@ -117,7 +134,13 @@ This is the "smart detection" feature that prevents unnecessary renames:
 3. **Result:** Provider IDs are added → Plugin renames series folder to `The Flash (2014) [tvdb-279121]`
 4. **Perform a library scan** → Episode files are renamed: `S01E01 - Pilot.mp4`, `S01E02 - Fastest Man Alive.mp4`, etc.
 
-#### ✅ Scenario 3: Flat Structure (No Season Folders)
+#### ✅ Scenario 3: Movie Identification
+1. You have a movie folder "The Matrix" that's not matched
+2. You press **"Identify"** and select "The Matrix (1999)"
+3. **Result:** Provider IDs are added → Plugin renames movie folder to `The Matrix (1999) [tmdb-603]`
+4. **Note:** The movie file itself (e.g., `The Matrix.mkv`) is not renamed, only the folder
+
+#### ✅ Scenario 4: Flat Structure (No Season Folders)
 1. Series has episodes directly in the series folder (no season subfolders)
 2. You identify the series and perform a library scan
 3. **Result:** 
@@ -126,7 +149,7 @@ This is the "smart detection" feature that prevents unnecessary renames:
    - Episodes moved to "Season 01" folder
    - Episodes renamed: `S01E01 - Pilot.mp4`, etc.
 
-#### ✅ Scenario 4: Existing Season Folders
+#### ✅ Scenario 5: Existing Season Folders
 1. Series already has "Season 1", "Season 2" folders
 2. You identify the series and perform a library scan
 3. **Result:**
@@ -134,7 +157,7 @@ This is the "smart detection" feature that prevents unnecessary renames:
    - Season folders left untouched (no changes)
    - Episodes renamed using their actual season numbers: `S01E01 - Pilot.mp4`, `S02E05 - The Darkness and the Light.mp4`, etc.
 
-#### ❌ Scenario 5: Regular Library Scan (No Changes)
+#### ❌ Scenario 6: Regular Library Scan (No Changes)
 1. Series already has provider IDs: `The Flash (2014) [tvdb-279121]`
 2. Regular library scan runs (no metadata changes)
 3. **Result:** Provider IDs unchanged → Plugin skips series rename (no rename)
@@ -151,14 +174,18 @@ This is the "smart detection" feature that prevents unnecessary renames:
 - ✅ **Episode files:** During full library scans if "Process During Library Scans" is enabled (updates all episode files to match metadata)
 - ✅ **Season folders:** When season metadata is available and season renaming is enabled
 - ✅ **Season folders:** During full library scans if "Process During Library Scans" is enabled
+- ✅ **Movie folders:** When you press **"Identify"** and select a match
+- ✅ **Movie folders:** When you press **"Identify"** and change to a different match
+- ✅ **Movie folders:** During library scans if movies get matched for the first time
+- ✅ **Movie folders:** During full library scans if "Process During Library Scans" is enabled (updates all movie folders to match metadata)
 
 **WON'T Rename:**
-- ❌ During normal library scans (if provider IDs don't change)
-- ❌ On every metadata update (only when provider IDs actually change)
-- ❌ Movies or other non-series items
-- ❌ Series without provider IDs (unless `RequireProviderIdMatch` is disabled)
+- ❌ During normal library scans (if provider IDs don't change and "Process During Library Scans" is disabled)
+- ❌ On every metadata update (only when provider IDs actually change, unless "Process During Library Scans" is enabled)
+- ❌ Items without provider IDs (unless `RequireProviderIdMatch` is disabled)
 - ❌ Episodes if episode number in filename doesn't match metadata (safety check)
 - ❌ Episodes without performing a library scan (episodes are processed during scans)
+- ❌ Movie files themselves (only movie folders are renamed)
 
 ## Configuration
 
@@ -173,13 +200,16 @@ Access plugin settings: **Dashboard** > **Plugins** > **MetadataRenamer**
 | **Rename Series Folders** | `true` | Enable/disable series folder renaming |
 | **Rename Season Folders** | `true` | Enable/disable season folder renaming |
 | **Rename Episode Files** | `true` | Enable/disable episode file renaming |
-| **Require Provider ID Match** | `true` | Only rename series with provider IDs |
+| **Rename Movie Folders** | `true` | Enable/disable movie folder renaming |
+| **Require Provider ID Match** | `true` | Only rename items with provider IDs |
 | **Only Rename When Provider IDs Change** | `true` | Smart detection - only rename when IDs change |
 | **Process During Library Scans** | `true` | When enabled, library scans (full or regular) will automatically update folder names and episode files to match metadata. When disabled, only the "Identify" flow triggers updates. |
 | **Series Folder Format** | `{Name} ({Year}) [{Provider}-{Id}]` | Customize series folder naming format |
 | **Season Folder Format** | `Season {Season:00}` | Customize season folder naming format |
 | **Episode File Format** | `S{Season:00}E{Episode:00} - {Title}` | Customize episode file naming format |
-| **Preferred Series Providers** | `Tvdb, Tmdb, Imdb` | Order of provider preference |
+| **Movie Folder Format** | `{Name} ({Year}) [{Provider}-{Id}]` | Customize movie folder naming format |
+| **Preferred Series Providers** | `Tvdb, Tmdb, Imdb` | Order of provider preference for series |
+| **Preferred Movie Providers** | `Tmdb, Imdb` | Order of provider preference for movies |
 | **Per-Item Cooldown (seconds)** | `60` | Cooldown between rename attempts |
 
 ### Custom Formats
@@ -221,6 +251,18 @@ Examples:
 - `{Series} - S{Season:00}E{Episode:00} - {Title}` → `The Flash - S01E01 - Pilot.mp4`
 - `E{Episode:00} - {Title}` → `E01 - Pilot.mp4` (for flat structures without season folders)
 
+#### Movie Folder Format
+Customize movie folder names using:
+- `{Name}` - Movie name
+- `{Year}` - Production year
+- `{Provider}` - Provider label (tmdb, imdb)
+- `{Id}` - Provider ID
+
+Examples:
+- `{Name} ({Year}) [{Provider}-{Id}]` → `The Matrix (1999) [tmdb-603]`
+- `{Name} - {Year} - {Provider}-{Id}` → `The Matrix - 1999 - tmdb-603`
+- `[{Provider}] {Name} ({Year})` → `[tmdb] The Matrix (1999)`
+
 ## Safety Features
 
 ### 1. Dry Run Mode (Default: ON)
@@ -249,6 +291,12 @@ Examples:
 - Detects existing season folders and leaves them untouched
 - Only creates "Season 01" folder for flat structures (episodes in series root)
 - Automatically organizes flat structures into season folders
+
+### 7. Movie Folder Renaming
+- Only renames the movie folder, never touches the movie file itself
+- Uses the same provider ID change detection logic as series
+- Respects "Process During Library Scans" setting
+- Works independently from series logic (no interference)
 
 ## Testing
 
@@ -359,6 +407,17 @@ Look for log entries prefixed with `[MR]`:
 2. **Check "Only Rename When Provider IDs Change" setting** - If enabled, items will only be processed if provider IDs changed OR "Process During Library Scans" is enabled
 3. **Perform a full library scan** - Go to Dashboard > Libraries > Select your library > Scan Library (Full)
 4. **Check logs** - Look for `[MR] ProcessDuringLibraryScans` entries to see if the setting is being applied
+
+### Movie Folders Not Renaming
+
+1. **Check "Rename Movie Folders" setting** - Go to plugin settings and verify "Rename Movie Folders" is enabled
+2. **Check movie metadata** - Movies must have name and year in Jellyfin metadata
+3. **Check provider IDs** - Movies must have at least one provider ID (Tmdb, Imdb) if "Require Provider ID Match" is enabled
+4. **Perform a library scan** - If "Process During Library Scans" is enabled, perform a full library scan
+5. **Use "Identify"** - Press "Identify" on the movie and select the correct match to trigger renaming
+6. **Check logs** - Look for `[MR] Processing Movie` entries to see what's happening
+
+**Note:** The plugin only renames movie folders, not the movie files themselves. The movie file (e.g., `The Matrix.mkv`) will remain unchanged.
 
 ### Want to Rename Without Provider ID Change?
 
