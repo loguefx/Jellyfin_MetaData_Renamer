@@ -21,6 +21,7 @@ public class RenameCoordinator
     private readonly TimeSpan _globalMinInterval = TimeSpan.FromSeconds(2);
     private readonly Dictionary<Guid, DateTime> _lastAttemptUtcByItem = new();
     private readonly Dictionary<Guid, string> _providerHashByItem = new();
+    private readonly Dictionary<Guid, Dictionary<string, string>> _previousProviderIdsByItem = new();
 
     // global debounce
     private DateTime _lastGlobalActionUtc = DateTime.MinValue;
@@ -45,6 +46,7 @@ public class RenameCoordinator
         {
             _lastAttemptUtcByItem.Clear();
             _providerHashByItem.Clear();
+            _previousProviderIdsByItem.Clear();
             _lastGlobalActionUtc = DateTime.MinValue;
             _logger?.LogInformation("[MR] RenameCoordinator state cleared");
         }
@@ -386,62 +388,125 @@ public class RenameCoordinator
                 return;
             }
 
-            // Update hash and proceed
+            // Handle provider IDs - use if available, otherwise use empty values
+            string providerLabel = string.Empty;
+            string providerId = string.Empty;
+
+            // SMART DETECTION: Before storing new provider IDs, check what changed
+            // This allows us to detect which provider the user selected in "Identify"
+            Dictionary<string, string>? previousProviderIds = null;
+            if (hasProviderIds && series.ProviderIds != null)
+            {
+                // Get previous provider IDs BEFORE storing new ones
+                _previousProviderIdsByItem.TryGetValue(series.Id, out previousProviderIds);
+            }
+
+            if (series.ProviderIds != null && series.ProviderIds.Count > 0)
+            {
+                // SMART DETECTION: If provider IDs changed, detect which one was newly added/changed
+                // This represents the provider the user selected in "Identify"
+                string? selectedProviderKey = null;
+                string? selectedProviderId = null;
+                
+                if (providerIdsChanged && previousProviderIds != null)
+                {
+                    // Compare old vs new to find what changed
+                    _logger.LogInformation("[MR] === Detecting User-Selected Provider (Identify) ===");
+                    
+                    foreach (var kv in series.ProviderIds)
+                    {
+                        var providerKey = kv.Key;
+                        var providerValue = kv.Value;
+                        
+                        // Check if this provider ID is new or changed
+                        if (!previousProviderIds.TryGetValue(providerKey, out var oldValue) || oldValue != providerValue)
+                        {
+                            selectedProviderKey = providerKey;
+                            selectedProviderId = providerValue;
+                            _logger.LogInformation("[MR] ✓ Detected newly added/changed provider: {Provider}={Id} (user selected this in Identify)", 
+                                providerKey, providerValue);
+                            break; // Use the first changed provider as the selected one
+                        }
+                    }
+                    
+                    if (selectedProviderKey == null)
+                    {
+                        _logger.LogInformation("[MR] No newly added/changed provider detected (all IDs were already present)");
+                    }
+                }
+                else if (isFirstTime)
+                {
+                    _logger.LogInformation("[MR] First time processing - cannot detect user selection, will use preferred provider");
+                }
+                
+                // If we detected a user-selected provider, use it; otherwise fall back to preferred list
+                if (selectedProviderKey != null && selectedProviderId != null)
+                {
+                    providerLabel = selectedProviderKey.Trim().ToLowerInvariant();
+                    providerId = selectedProviderId.Trim();
+                    _logger.LogInformation("[MR] === Provider Selection (User-Selected) ===");
+                    _logger.LogInformation("[MR] Using user-selected provider from Identify: {Provider}={Id}", providerLabel, providerId);
+                }
+                else
+                {
+                    // Fall back to preferred provider list
+                    var preferredProviders = cfg.PreferredSeriesProviders != null
+                        ? string.Join(", ", cfg.PreferredSeriesProviders)
+                        : "NONE";
+                    _logger.LogInformation("[MR] Preferred Providers: {Providers}", preferredProviders);
+
+                    var preferredList = cfg.PreferredSeriesProviders != null
+                        ? cfg.PreferredSeriesProviders
+                        : new System.Collections.ObjectModel.Collection<string>();
+                    var best = ProviderIdHelper.GetBestProvider(series.ProviderIds, preferredList);
+                    if (best != null)
+                    {
+                        providerLabel = best.Value.ProviderLabel;
+                        providerId = best.Value.Id;
+                        _logger.LogInformation("[MR] === Provider Selection (Preferred List) ===");
+                        _logger.LogInformation("[MR] Selected Provider: {Provider}={Id} (from preferred list: {PreferredList})", 
+                            providerLabel, providerId, string.Join(", ", preferredList));
+                        
+                        // Warn if multiple provider IDs exist - might indicate conflicting matches
+                        if (series.ProviderIds.Count > 1)
+                        {
+                            _logger.LogWarning("[MR] ⚠️ WARNING: Multiple provider IDs detected ({Count}). Selected: {SelectedProvider}={SelectedId}", 
+                                series.ProviderIds.Count, providerLabel, providerId);
+                            _logger.LogWarning("[MR] ⚠️ If the wrong ID was selected, check your 'Preferred Series Providers' setting in plugin configuration.");
+                            _logger.LogWarning("[MR] ⚠️ Current preference order: {Order}", string.Join(" > ", preferredList));
+                        }
+                    }
+                    else
+                    {
+                        _logger.LogWarning("[MR] No matching provider found in preferred list");
+                    }
+                }
+            }
+            
+            // Update hash AFTER processing (so we can compare next time)
             _logger.LogInformation("[MR] ✓ Proceeding with rename. Reason: {Reason}", proceedReason);
             _logger.LogInformation("[MR] Old Hash: {OldHash}, New Hash: {NewHash}", oldHash ?? "(none)", newHash);
             if (hasProviderIds && series.ProviderIds != null)
             {
                 _providerHashByItem[series.Id] = newHash;
+                // Store current provider IDs for next comparison
+                _previousProviderIdsByItem[series.Id] = new Dictionary<string, string>(series.ProviderIds);
             }
-
-            // Handle provider IDs - use if available, otherwise use empty values
-            string providerLabel = string.Empty;
-            string providerId = string.Empty;
-
-            if (series.ProviderIds != null && series.ProviderIds.Count > 0)
+            
+            if (series.ProviderIds == null || series.ProviderIds.Count == 0)
             {
-                var preferredProviders = cfg.PreferredSeriesProviders != null
-                    ? string.Join(", ", cfg.PreferredSeriesProviders)
-                    : "NONE";
-                _logger.LogInformation("[MR] Preferred Providers: {Providers}", preferredProviders);
-
-                var preferredList = cfg.PreferredSeriesProviders != null
-                    ? cfg.PreferredSeriesProviders
-                    : new System.Collections.ObjectModel.Collection<string>();
-                var best = ProviderIdHelper.GetBestProvider(series.ProviderIds, preferredList);
-                if (best != null)
+                if (cfg.RequireProviderIdMatch)
                 {
-                    providerLabel = best.Value.ProviderLabel;
-                    providerId = best.Value.Id;
-                    _logger.LogInformation("[MR] === Provider Selection ===");
-                    _logger.LogInformation("[MR] Selected Provider: {Provider}={Id} (from preferred list: {PreferredList})", 
-                        providerLabel, providerId, string.Join(", ", preferredList));
-                    
-                    // Warn if multiple provider IDs exist - might indicate conflicting matches
-                    if (series.ProviderIds.Count > 1)
-                    {
-                        _logger.LogWarning("[MR] ⚠️ WARNING: Multiple provider IDs detected ({Count}). Selected: {SelectedProvider}={SelectedId}", 
-                            series.ProviderIds.Count, providerLabel, providerId);
-                        _logger.LogWarning("[MR] ⚠️ If the wrong ID was selected, check your 'Preferred Series Providers' setting in plugin configuration.");
-                        _logger.LogWarning("[MR] ⚠️ Current preference order: {Order}", string.Join(" > ", preferredList));
-                    }
+                    // If we require provider IDs but don't have any, skip renaming
+                    _logger.LogWarning("[MR] SKIP: RequireProviderIdMatch is true but no ProviderIds found. Name={Name}", name);
+                    _logger.LogInformation("[MR] ===== Processing Complete (Skipped) =====");
+                    return;
                 }
                 else
                 {
-                    _logger.LogWarning("[MR] No matching provider found in preferred list");
+                    // No provider IDs but we don't require them - rename anyway to help with identification
+                    _logger.LogInformation("[MR] No ProviderIds but RequireProviderIdMatch is false - renaming to help identification");
                 }
-            }
-            else if (cfg.RequireProviderIdMatch)
-            {
-                // If we require provider IDs but don't have any, skip renaming
-                _logger.LogWarning("[MR] SKIP: RequireProviderIdMatch is true but no ProviderIds found. Name={Name}", name);
-                _logger.LogInformation("[MR] ===== Processing Complete (Skipped) =====");
-                return;
-            }
-            else
-            {
-                // No provider IDs but we don't require them - rename anyway to help with identification
-                _logger.LogInformation("[MR] No ProviderIds but RequireProviderIdMatch is false - renaming to help identification");
             }
 
             // Build final desired folder name: Name (Year) [provider-id] or Name (Year) if no provider IDs
@@ -634,56 +699,119 @@ public class RenameCoordinator
             return;
         }
 
-        // Update hash and proceed
+        // Handle provider IDs - use if available, otherwise use empty values
+        string providerLabel = string.Empty;
+        string providerId = string.Empty;
+
+        // SMART DETECTION: Before storing new provider IDs, check what changed
+        // This allows us to detect which provider the user selected in "Identify"
+        Dictionary<string, string>? previousMovieProviderIds = null;
+        if (hasProviderIds && movie.ProviderIds != null)
+        {
+            // Get previous provider IDs BEFORE storing new ones
+            _previousProviderIdsByItem.TryGetValue(movie.Id, out previousMovieProviderIds);
+        }
+
+        if (movie.ProviderIds != null && movie.ProviderIds.Count > 0)
+        {
+            // SMART DETECTION: If provider IDs changed, detect which one was newly added/changed
+            // This represents the provider the user selected in "Identify"
+            string? selectedProviderKey = null;
+            string? selectedProviderId = null;
+            
+            if (providerIdsChanged && previousMovieProviderIds != null)
+            {
+                // Compare old vs new to find what changed
+                _logger.LogInformation("[MR] === Detecting User-Selected Provider (Identify - Movie) ===");
+                
+                foreach (var kv in movie.ProviderIds)
+                {
+                    var providerKey = kv.Key;
+                    var providerValue = kv.Value;
+                    
+                    // Check if this provider ID is new or changed
+                    if (!previousMovieProviderIds.TryGetValue(providerKey, out var oldValue) || oldValue != providerValue)
+                    {
+                        selectedProviderKey = providerKey;
+                        selectedProviderId = providerValue;
+                        _logger.LogInformation("[MR] ✓ Detected newly added/changed provider: {Provider}={Id} (user selected this in Identify)", 
+                            providerKey, providerValue);
+                        break; // Use the first changed provider as the selected one
+                    }
+                }
+                
+                if (selectedProviderKey == null)
+                {
+                    _logger.LogInformation("[MR] No newly added/changed provider detected (all IDs were already present)");
+                }
+            }
+            else if (isFirstTime)
+            {
+                _logger.LogInformation("[MR] First time processing - cannot detect user selection, will use preferred provider");
+            }
+            
+            // If we detected a user-selected provider, use it; otherwise fall back to preferred list
+            if (selectedProviderKey != null && selectedProviderId != null)
+            {
+                providerLabel = selectedProviderKey.Trim().ToLowerInvariant();
+                providerId = selectedProviderId.Trim();
+                _logger.LogInformation("[MR] === Provider Selection (User-Selected - Movie) ===");
+                _logger.LogInformation("[MR] Using user-selected provider from Identify: {Provider}={Id}", providerLabel, providerId);
+            }
+            else
+            {
+                // Fall back to preferred provider list
+                var preferredProviders = cfg.PreferredMovieProviders != null
+                    ? string.Join(", ", cfg.PreferredMovieProviders)
+                    : "NONE";
+                _logger.LogInformation("[MR] Preferred Providers: {Providers}", preferredProviders);
+
+                var preferredList = cfg.PreferredMovieProviders != null
+                    ? cfg.PreferredMovieProviders
+                    : new System.Collections.ObjectModel.Collection<string>();
+                var best = ProviderIdHelper.GetBestProvider(movie.ProviderIds, preferredList);
+                if (best != null)
+                {
+                    providerLabel = best.Value.ProviderLabel;
+                    providerId = best.Value.Id;
+                    _logger.LogInformation("[MR] === Provider Selection (Preferred List - Movie) ===");
+                    _logger.LogInformation("[MR] Selected Provider: {Provider}={Id} (from preferred list: {PreferredList})", 
+                        providerLabel, providerId, string.Join(", ", preferredList));
+                    
+                    // Warn if multiple provider IDs exist - might indicate conflicting matches
+                    if (movie.ProviderIds.Count > 1)
+                    {
+                        _logger.LogWarning("[MR] ⚠️ WARNING: Multiple provider IDs detected ({Count}). Selected: {SelectedProvider}={SelectedId}", 
+                            movie.ProviderIds.Count, providerLabel, providerId);
+                        _logger.LogWarning("[MR] ⚠️ If the wrong ID was selected, check your 'Preferred Movie Providers' setting in plugin configuration.");
+                        _logger.LogWarning("[MR] ⚠️ Current preference order: {Order}", string.Join(" > ", preferredList));
+                    }
+                }
+                else
+                {
+                    _logger.LogWarning("[MR] No matching provider found in preferred list");
+                }
+            }
+        }
+        
+        // Update hash AFTER processing (so we can compare next time)
         _logger.LogInformation("[MR] ✓ Proceeding with rename. Reason: {Reason}", proceedReason);
         _logger.LogInformation("[MR] Old Hash: {OldHash}, New Hash: {NewHash}", oldHash ?? "(none)", newHash);
         if (hasProviderIds && movie.ProviderIds != null)
         {
             _providerHashByItem[movie.Id] = newHash;
+            // Store current provider IDs for next comparison
+            _previousProviderIdsByItem[movie.Id] = new Dictionary<string, string>(movie.ProviderIds);
         }
-
-        // Handle provider IDs - use if available, otherwise use empty values
-        string providerLabel = string.Empty;
-        string providerId = string.Empty;
-
-        if (movie.ProviderIds != null && movie.ProviderIds.Count > 0)
+        
+        if (movie.ProviderIds == null || movie.ProviderIds.Count == 0)
         {
-            var preferredProviders = cfg.PreferredMovieProviders != null
-                ? string.Join(", ", cfg.PreferredMovieProviders)
-                : "NONE";
-            _logger.LogInformation("[MR] Preferred Providers: {Providers}", preferredProviders);
-
-            var preferredList = cfg.PreferredMovieProviders != null
-                ? cfg.PreferredMovieProviders
-                : new System.Collections.ObjectModel.Collection<string>();
-            var best = ProviderIdHelper.GetBestProvider(movie.ProviderIds, preferredList);
-            if (best != null)
+            if (cfg.RequireProviderIdMatch)
             {
-                providerLabel = best.Value.ProviderLabel;
-                providerId = best.Value.Id;
-                _logger.LogInformation("[MR] === Provider Selection (Movie) ===");
-                _logger.LogInformation("[MR] Selected Provider: {Provider}={Id} (from preferred list: {PreferredList})", 
-                    providerLabel, providerId, string.Join(", ", preferredList));
-                
-                // Warn if multiple provider IDs exist - might indicate conflicting matches
-                if (movie.ProviderIds.Count > 1)
-                {
-                    _logger.LogWarning("[MR] ⚠️ WARNING: Multiple provider IDs detected ({Count}). Selected: {SelectedProvider}={SelectedId}", 
-                        movie.ProviderIds.Count, providerLabel, providerId);
-                    _logger.LogWarning("[MR] ⚠️ If the wrong ID was selected, check your 'Preferred Movie Providers' setting in plugin configuration.");
-                    _logger.LogWarning("[MR] ⚠️ Current preference order: {Order}", string.Join(" > ", preferredList));
-                }
+                _logger.LogWarning("[MR] SKIP: RequireProviderIdMatch is true but no ProviderIds found. Name={Name}", name);
+                _logger.LogInformation("[MR] ===== Processing Complete (Skipped) =====");
+                return;
             }
-            else
-            {
-                _logger.LogWarning("[MR] No matching provider found in preferred list");
-            }
-        }
-        else if (cfg.RequireProviderIdMatch)
-        {
-            _logger.LogWarning("[MR] SKIP: RequireProviderIdMatch is true but no ProviderIds found. Name={Name}", name);
-            _logger.LogInformation("[MR] ===== Processing Complete (Skipped) =====");
-            return;
         }
         else
         {
