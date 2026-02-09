@@ -284,7 +284,7 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
             _pathRenameService = new PathRenameService(logger);
 
             var coordinatorLogger = loggerFactory.CreateLogger<RenameCoordinator>();
-            _renameCoordinator = new RenameCoordinator(coordinatorLogger, _pathRenameService);
+            _renameCoordinator = new RenameCoordinator(coordinatorLogger, _pathRenameService, _libraryManager);
 
             _libraryManager.ItemUpdated += OnItemUpdated;
             
