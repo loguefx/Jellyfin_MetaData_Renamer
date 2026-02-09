@@ -677,21 +677,44 @@ public class RenameCoordinator
 
             var renameSuccessful = _pathRenamer.TryRenameSeriesFolder(series, desiredFolderName, cfg.DryRun);
 
+            // DEBUG: Log detailed decision-making for episode processing
+            _logger.LogInformation("[MR] === Episode Processing Decision ===");
+            _logger.LogInformation("[MR] renameSuccessful: {RenameSuccessful}", renameSuccessful);
+            _logger.LogInformation("[MR] cfg.RenameEpisodeFiles: {RenameEpisodeFiles}", cfg.RenameEpisodeFiles);
+            _logger.LogInformation("[MR] cfg.DryRun: {DryRun}", cfg.DryRun);
+            _logger.LogInformation("[MR] providerIdsChanged: {ProviderIdsChanged}", providerIdsChanged);
+            _logger.LogInformation("[MR] Series ID: {SeriesId}, Series Name: {SeriesName}", series.Id, series.Name);
+
             // After successful series rename, process all episodes from all seasons
             // This ensures ALL seasons are processed, not just Season 1
             if (renameSuccessful && cfg.RenameEpisodeFiles && !cfg.DryRun && providerIdsChanged)
             {
-                _logger.LogInformation("[MR] === Processing all episodes from all seasons after series identification ===");
+                _logger.LogInformation("[MR] === DECISION: Processing all episodes from all seasons after series identification (provider IDs changed) ===");
                 ProcessAllEpisodesFromSeries(series, cfg, now);
             }
             else if (renameSuccessful && cfg.RenameEpisodeFiles && !cfg.DryRun)
             {
-                _logger.LogInformation("[MR] === Scanning for episodes in series root after rename ===");
-                // Calculate the new path (series.Path is still the old path after rename)
-                var parentDirectory = Path.GetDirectoryName(path);
-                var newSeriesPath = Path.Combine(parentDirectory, desiredFolderName);
-                _logger.LogInformation("[MR] Using new series path for episode processing: {NewPath}", newSeriesPath);
-                ProcessEpisodesInSeriesRoot(newSeriesPath, cfg, now);
+                _logger.LogInformation("[MR] === DECISION: Provider IDs did not change, but series was renamed. Processing all episodes anyway. ===");
+                _logger.LogInformation("[MR] === Processing all episodes from all seasons (provider IDs unchanged but series renamed) ===");
+                ProcessAllEpisodesFromSeries(series, cfg, now);
+            }
+            else if (cfg.RenameEpisodeFiles && !cfg.DryRun && providerIdsChanged)
+            {
+                _logger.LogInformation("[MR] === DECISION: Series folder not renamed (already correct name), but provider IDs changed. Processing all episodes. ===");
+                _logger.LogInformation("[MR] === Processing all episodes from all seasons (provider IDs changed, no rename needed) ===");
+                ProcessAllEpisodesFromSeries(series, cfg, now);
+            }
+            else
+            {
+                _logger.LogInformation("[MR] === DECISION: Not processing all episodes. Reasons:");
+                if (!renameSuccessful)
+                    _logger.LogInformation("[MR]   - Series folder rename was not successful");
+                if (!cfg.RenameEpisodeFiles)
+                    _logger.LogInformation("[MR]   - RenameEpisodeFiles is disabled");
+                if (cfg.DryRun)
+                    _logger.LogInformation("[MR]   - DryRun mode is enabled");
+                if (!providerIdsChanged)
+                    _logger.LogInformation("[MR]   - Provider IDs did not change");
             }
 
             _logger.LogInformation("[MR] ===== Processing Complete =====");
@@ -731,38 +754,74 @@ public class RenameCoordinator
                     Recursive = true
                 };
                 
+                _logger.LogInformation("[MR] === Executing Episode Query ===");
+                _logger.LogInformation("[MR] Query: ParentId={ParentId}, Recursive={Recursive}", series.Id, true);
+                
                 var allItems = _libraryManager.GetItemList(query);
+                _logger.LogInformation("[MR] Query returned {TotalItems} total items", allItems.Count);
+                
+                // Log item types found
+                var itemTypes = allItems.GroupBy(item => item.GetType().Name).ToList();
+                _logger.LogInformation("[MR] Item types found:");
+                foreach (var typeGroup in itemTypes)
+                {
+                    _logger.LogInformation("[MR]   - {Type}: {Count} items", typeGroup.Key, typeGroup.Count());
+                }
+                
                 allEpisodes = allItems.OfType<Episode>().ToList();
                 
                 _logger.LogInformation("[MR] Retrieved {Count} episodes using recursive query", allEpisodes.Count);
+                
+                // Log episodes by season for debugging
+                if (allEpisodes.Count > 0)
+                {
+                    var episodesBySeasonDebug = allEpisodes
+                        .Where(e => e.ParentIndexNumber.HasValue)
+                        .GroupBy(e => e.ParentIndexNumber.Value)
+                        .OrderBy(g => g.Key)
+                        .ToList();
+                    
+                    _logger.LogInformation("[MR] Episodes found by season (from query):");
+                    foreach (var seasonGroup in episodesBySeasonDebug)
+                    {
+                        _logger.LogInformation("[MR]   Season {Season}: {Count} episodes", 
+                            seasonGroup.Key.ToString(System.Globalization.CultureInfo.InvariantCulture), 
+                            seasonGroup.Count());
+                    }
+                    
+                    // Log episodes without season numbers
+                    var episodesWithoutSeason = allEpisodes.Where(e => !e.ParentIndexNumber.HasValue).ToList();
+                    if (episodesWithoutSeason.Count > 0)
+                    {
+                        _logger.LogWarning("[MR] Found {Count} episodes without season numbers (ParentIndexNumber is null)", episodesWithoutSeason.Count);
+                        foreach (var ep in episodesWithoutSeason.Take(5)) // Log first 5
+                        {
+                            _logger.LogWarning("[MR]   - Episode ID: {Id}, Name: {Name}, IndexNumber: {IndexNumber}", 
+                                ep.Id, ep.Name ?? "NULL", ep.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+                        }
+                    }
+                }
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "[MR] Could not retrieve episodes using GetItemList. Trying alternative method: {Message}", ex.Message);
                 
-                // Fallback: Try to get episodes from series directly if it has a method
+                // Fallback: Try to get episodes from series directly
                 // This is a fallback in case the query method doesn't work
                 try
                 {
-                    // Get seasons first, then episodes from each season
-                    var seasons = _libraryManager.GetItemList(new InternalItemsQuery
+                    // Get all items recursively and filter for episodes
+                    // This should work even if IncludeItemTypes has issues
+                    var query = new InternalItemsQuery
                     {
                         ParentId = series.Id,
-                        IncludeItemTypes = new[] { typeof(Season).Name }
-                    }).OfType<Season>().ToList();
+                        Recursive = true
+                    };
                     
-                    foreach (var season in seasons)
-                    {
-                        var seasonEpisodes = _libraryManager.GetItemList(new InternalItemsQuery
-                        {
-                            ParentId = season.Id,
-                            IncludeItemTypes = new[] { typeof(Episode).Name }
-                        }).OfType<Episode>().ToList();
-                        
-                        allEpisodes.AddRange(seasonEpisodes);
-                    }
+                    var allItems = _libraryManager.GetItemList(query);
+                    allEpisodes = allItems.OfType<Episode>().ToList();
                     
-                    _logger.LogInformation("[MR] Retrieved {Count} episodes using season-by-season method", allEpisodes.Count);
+                    _logger.LogInformation("[MR] Retrieved {Count} episodes using fallback recursive method", allEpisodes.Count);
                 }
                 catch (Exception fallbackEx)
                 {
@@ -789,7 +848,9 @@ public class RenameCoordinator
             _logger.LogInformation("[MR] Episodes by season:");
             foreach (var seasonGroup in episodesBySeason)
             {
-                _logger.LogInformation("[MR]   Season {Season}: {Count} episodes", seasonGroup.Key, seasonGroup.Count());
+                _logger.LogInformation("[MR]   Season {Season}: {Count} episodes", 
+                    seasonGroup.Key.ToString(System.Globalization.CultureInfo.InvariantCulture), 
+                    seasonGroup.Count().ToString(System.Globalization.CultureInfo.InvariantCulture));
             }
 
             // Process each episode
@@ -799,27 +860,56 @@ public class RenameCoordinator
             {
                 try
                 {
+                    var seasonNum = episode.ParentIndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL";
+                    var episodeNum = episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL";
+                    var episodeName = episode.Name ?? "Unknown";
+                    var episodePath = episode.Path ?? "NULL";
+                    
+                    _logger.LogInformation("[MR] === Processing Episode: {Name} (S{Season}E{Episode}) ===", 
+                        episodeName, seasonNum, episodeNum);
+                    _logger.LogInformation("[MR] Episode ID: {Id}", episode.Id);
+                    _logger.LogInformation("[MR] Episode Path: {Path}", episodePath);
+                    _logger.LogInformation("[MR] Season Number: {Season}", seasonNum);
+                    _logger.LogInformation("[MR] Episode Number: {Episode}", episodeNum);
+                    
                     // Check if episode has a valid path
                     if (string.IsNullOrWhiteSpace(episode.Path) || !File.Exists(episode.Path))
                     {
-                        _logger.LogDebug("[MR] Skipping episode {Name} (ID: {Id}) - no valid file path", episode.Name, episode.Id);
+                        _logger.LogWarning("[MR] SKIP (ProcessAllEpisodes): Episode file does not exist on disk. Path={Path}, EpisodeId={Id}, Name={Name}, Season={Season}, Episode={Episode}", 
+                            episodePath, episode.Id, episodeName, seasonNum, episodeNum);
                         skippedCount++;
                         continue;
                     }
 
-                    // Process the episode
-                    _logger.LogInformation("[MR] Processing episode: {Name} (S{Season}E{Episode})", 
-                        episode.Name ?? "Unknown",
-                        episode.ParentIndexNumber?.ToString("00") ?? "??",
-                        episode.IndexNumber?.ToString("00") ?? "??");
+                    // Check if episode has valid metadata (IndexNumber and ParentIndexNumber)
+                    if (!episode.IndexNumber.HasValue || !episode.ParentIndexNumber.HasValue)
+                    {
+                        _logger.LogWarning("[MR] SKIP (ProcessAllEpisodes): Episode is missing IndexNumber or ParentIndexNumber metadata. EpisodeId={Id}, Name={Name}, Season={Season}, Episode={Episode}", 
+                            episode.Id, episodeName, seasonNum, episodeNum);
+                        skippedCount++;
+                        continue;
+                    }
 
-                    HandleEpisodeUpdate(episode, cfg, now);
+                    // Log episode details before processing
+                    _logger.LogInformation("[MR] Episode metadata validated. Proceeding with rename processing...");
+                    _logger.LogInformation("[MR] Series: {SeriesName}", episode.Series?.Name ?? "NULL");
+                    _logger.LogInformation("[MR] Series Path: {SeriesPath}", episode.Series?.Path ?? "NULL");
+
+                    // Call HandleEpisodeUpdate for each episode
+                    // This will apply the renaming logic and safety checks
+                    HandleEpisodeUpdate(episode, cfg, now, isBulkProcessing: true);
                     processedCount++;
+                    
+                    _logger.LogInformation("[MR] ✓ Successfully processed episode: {Name} (S{Season}E{Episode})", 
+                        episodeName, seasonNum, episodeNum);
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "[MR] Error processing episode {Name} (ID: {Id}): {Message}", 
-                        episode.Name, episode.Id, ex.Message);
+                    _logger.LogError(ex, "[MR] ERROR processing episode {EpisodeName} (ID: {EpisodeId}, S{Season}E{Episode}) during bulk series update: {Message}", 
+                        episode.Name ?? "Unknown", episode.Id, 
+                        episode.ParentIndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "??",
+                        episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "??",
+                        ex.Message);
                     skippedCount++;
                 }
             }
@@ -1534,15 +1624,21 @@ public class RenameCoordinator
     /// - episode.Name (episode title from metadata)
     /// - episode.SeriesName (series name from metadata)
     /// </summary>
-    private void HandleEpisodeUpdate(Episode episode, PluginConfiguration cfg, DateTime now)
+    private void HandleEpisodeUpdate(Episode episode, PluginConfiguration cfg, DateTime now, bool isBulkProcessing = false)
     {
         try
         {
+            var seasonNum = episode.ParentIndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL";
+            var episodeNum = episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL";
+            
             // #region agent log
-            try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "A", location = "RenameCoordinator.cs:439", message = "HandleEpisodeUpdate entry", data = new { episodeId = episode.Id.ToString(), episodeName = episode.Name ?? "NULL", episodePath = episode.Path ?? "NULL", episodeType = episode.GetType().FullName }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+            try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "A", location = "RenameCoordinator.cs:439", message = "HandleEpisodeUpdate entry", data = new { episodeId = episode.Id.ToString(), episodeName = episode.Name ?? "NULL", episodePath = episode.Path ?? "NULL", episodeType = episode.GetType().FullName, seasonNumber = seasonNum, episodeNumber = episodeNum, isBulkProcessing = isBulkProcessing }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
             // #endregion
             
+            _logger.LogInformation("[MR] ===== HandleEpisodeUpdate Entry =====");
             _logger.LogInformation("[MR] Processing Episode: Name={Name}, Id={Id}, Path={Path}", episode.Name, episode.Id, episode.Path);
+            _logger.LogInformation("[MR] Season: {Season}, Episode: {Episode}", seasonNum, episodeNum);
+            _logger.LogInformation("[MR] Is Bulk Processing: {IsBulkProcessing}", isBulkProcessing);
             
             // #region agent log - Hypothesis A: Property access timing
             try
@@ -1987,10 +2083,17 @@ public class RenameCoordinator
             _pathRenamer.TryRenameEpisodeFile(episode, desiredFileName, fileExtension, cfg.DryRun, path);
 
             _logger.LogInformation("[MR] ===== Episode Processing Complete =====");
+            _logger.LogInformation("[MR] Episode: {Name} (S{Season}E{Episode}) - Processing finished", 
+                episode.Name ?? "Unknown",
+                episode.ParentIndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "??",
+                episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "??");
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "[MR] ERROR in HandleEpisodeUpdate: {Message}", ex.Message);
+            var seasonNum = episode.ParentIndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL";
+            var episodeNum = episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL";
+            _logger.LogError(ex, "[MR] ERROR in HandleEpisodeUpdate for episode {EpisodeName} (S{Season}E{Episode}, ID: {EpisodeId}): {Message}", 
+                episode.Name ?? "Unknown", seasonNum, episodeNum, episode.Id, ex.Message);
             _logger.LogError("[MR] Stack Trace: {StackTrace}", ex.StackTrace ?? "N/A");
         }
     }
