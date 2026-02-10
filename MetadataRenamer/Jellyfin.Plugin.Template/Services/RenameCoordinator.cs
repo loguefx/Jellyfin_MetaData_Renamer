@@ -1232,20 +1232,22 @@ public class RenameCoordinator
             {
                 // Check if we've already processed this series recently (avoid duplicate processing)
                 // Process episodes if:
-                // - Provider IDs changed (series was identified)
-                // - Series hasn't been processed for episodes yet
-                // - Series folder was renamed (and not already processed)
-                // - OR if series folder rename was skipped due to cooldown but episodes still need processing
+                // - Provider IDs changed (series was identified) - ALWAYS process
+                // - Series hasn't been processed for episodes yet - ALWAYS process
+                // - Series folder was renamed (and not already processed) - Process if rename happened
+                // - Series folder rename was skipped due to cooldown - This indicates a library scan is happening,
+                //   so we should process episodes even if already processed (to catch any metadata updates)
                 var shouldReprocess = providerIdsChanged || 
                                      !_seriesProcessedForEpisodes.Contains(series.Id) ||
                                      (renameSuccessful && !_seriesProcessedForEpisodes.Contains(series.Id)) ||
-                                     (seriesRenameOnCooldown && !_seriesProcessedForEpisodes.Contains(series.Id));
+                                     (seriesRenameOnCooldown && cfg.ProcessDuringLibraryScans);
 
                 _logger.LogInformation("[MR] [DEBUG] shouldReprocess: {ShouldReprocess}", shouldReprocess);
                 _logger.LogInformation("[MR] [DEBUG]   - providerIdsChanged: {Changed}", providerIdsChanged);
                 _logger.LogInformation("[MR] [DEBUG]   - Not in processed set: {NotProcessed}", !_seriesProcessedForEpisodes.Contains(series.Id));
                 _logger.LogInformation("[MR] [DEBUG]   - renameSuccessful: {Renamed}", renameSuccessful);
                 _logger.LogInformation("[MR] [DEBUG]   - seriesRenameOnCooldown: {OnCooldown}", seriesRenameOnCooldown);
+                _logger.LogInformation("[MR] [DEBUG]   - ProcessDuringLibraryScans: {ProcessDuringLibraryScans}", cfg.ProcessDuringLibraryScans);
 
                 if (shouldReprocess)
                 {
