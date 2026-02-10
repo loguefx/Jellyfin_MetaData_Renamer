@@ -7,16 +7,16 @@
                        {
                            "changelog":  "Automatic series folder renaming on metadata identification",
                            "version":  "1.0.0.0",
-                           "checksum":  "FFE75A140EE175545714BC28D25F9F03",
-                           "timestamp":  "2026-02-10T08:26:20.457Z",
+                           "checksum":  "74C81B412DDE72FEEB87B9A71E6E3B34",
+                           "timestamp":  "2026-02-10T08:33:01.585Z",
                            "targetAbi":  "10.10.0.0",
                            "sourceUrl":  "https://raw.githubusercontent.com/loguefx/Jellyfin_MetaData_Renamer/main/MetadataRenamer/repository/Jellyfin.Plugin.MetadataRenamer.zip"
                        },
                        {
                            "changelog":  "Automatic series folder renaming on metadata identification",
                            "version":  "1.0.0.0",
-                           "checksum":  "FFE75A140EE175545714BC28D25F9F03",
-                           "timestamp":  "2026-02-10T08:26:20.457Z",
+                           "checksum":  "74C81B412DDE72FEEB87B9A71E6E3B34",
+                           "timestamp":  "2026-02-10T08:33:01.585Z",
                            "targetAbi":  "10.11.0.0",
                            "sourceUrl":  "https://raw.githubusercontent.com/loguefx/Jellyfin_MetaData_Renamer/main/MetadataRenamer/repository/Jellyfin.Plugin.MetadataRenamer.zip"
                        }
