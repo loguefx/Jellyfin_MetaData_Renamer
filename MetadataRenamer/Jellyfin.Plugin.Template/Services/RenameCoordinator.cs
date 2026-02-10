@@ -2301,6 +2301,8 @@ public class RenameCoordinator
                     var episodeName = episode.Name ?? "Unknown";
                     var episodePath = episode.Path ?? "NULL";
                     var seasonNumber = episode.ParentIndexNumber ?? -1;
+                    // isSeason2Plus applies to ALL seasons >= 2 (Season 2, 3, 4, 5, etc.)
+                    // This enables special handling for multi-season shows (path derivation, relaxed validation, etc.)
                     var isSeason2Plus = seasonNumber >= 2; // Define early for use in validation
                     
                     // Track which season this episode belongs to
