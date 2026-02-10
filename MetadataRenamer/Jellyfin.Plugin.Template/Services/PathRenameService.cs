@@ -470,8 +470,85 @@ public class PathRenameService
 
             if (File.Exists(newFullPath))
             {
-                _logger.LogError("[MR] ERROR: Target file already exists. Cannot rename. From: {From}, To: {To}", currentPath, newFullPath);
-                return;
+                // Check if target file is the same as source (same path or same file)
+                var targetFileInfo = new FileInfo(newFullPath);
+                var sourceFileInfo = new FileInfo(currentPath);
+                var isSameFile = string.Equals(currentPath, newFullPath, StringComparison.OrdinalIgnoreCase);
+                var targetFileSize = targetFileInfo.Exists ? targetFileInfo.Length : -1;
+                var sourceFileSize = sourceFileInfo.Exists ? sourceFileInfo.Length : -1;
+                var filesAreSame = isSameFile || (targetFileSize == sourceFileSize && targetFileSize > 0);
+                
+                // #region agent log - DUPLICATE-TARGET-FILENAME: Track when target file already exists
+                try
+                {
+                    System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", 
+                        System.Text.Json.JsonSerializer.Serialize(new {
+                            runId = "run1",
+                            hypothesisId = "DUPLICATE-TARGET-FILENAME",
+                            location = "PathRenameService.cs:471",
+                            message = "Target file already exists - checking if same file",
+                            data = new {
+                                episodeId = episode.Id.ToString(),
+                                episodeName = episode.Name ?? "NULL",
+                                seasonNumber = seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                                episodeNumber = episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                                isSeason2Plus = isSeason2Plus,
+                                sourcePath = currentPath,
+                                targetPath = newFullPath,
+                                isSameFile = isSameFile,
+                                sourceFileSize = sourceFileSize,
+                                targetFileSize = targetFileSize,
+                                filesAreSame = filesAreSame,
+                                desiredFileName = desiredFileName + fileExtension
+                            },
+                            timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                        }) + "\n");
+                }
+                catch (Exception logEx)
+                {
+                    _logger.LogError(logEx, "[MR] [DEBUG] [DUPLICATE-TARGET-FILENAME] ERROR logging: {Error}", logEx.Message);
+                }
+                // #endregion
+                
+                if (filesAreSame)
+                {
+                    _logger.LogInformation("[MR] Target file already exists and is the same as source. File already renamed correctly. From: {From}, To: {To}", currentPath, newFullPath);
+                    return;
+                }
+                
+                // Target file exists and is different - this is a duplicate episode metadata issue
+                // For Season 2+ episodes, append a suffix to avoid conflicts
+                if (isSeason2Plus)
+                {
+                    var baseName = Path.GetFileNameWithoutExtension(desiredFileName);
+                    var extension = fileExtension;
+                    var counter = 1;
+                    string alternativePath;
+                    
+                    do
+                    {
+                        var alternativeFileName = $"{baseName} ({counter}){extension}";
+                        alternativePath = Path.Combine(directory.FullName, alternativeFileName);
+                        counter++;
+                    } while (File.Exists(alternativePath) && counter < 100); // Safety limit
+                    
+                    if (counter >= 100)
+                    {
+                        _logger.LogError("[MR] ERROR: Cannot find alternative filename after 100 attempts. From: {From}, To: {To}", currentPath, newFullPath);
+                        return;
+                    }
+                    
+                    _logger.LogWarning("[MR] [DEBUG] [DUPLICATE-TARGET-HANDLED] Target file exists with different content. Using alternative filename for Season 2+ episode. Original target: {Original}, Alternative: {Alternative}, EpisodeId: {EpisodeId}", 
+                        newFullPath, alternativePath, episode.Id);
+                    newFullPath = alternativePath;
+                    newFileName = Path.GetFileName(alternativePath);
+                }
+                else
+                {
+                    _logger.LogError("[MR] ERROR: Target file already exists with different content. Cannot rename. From: {From}, To: {To}, EpisodeId: {EpisodeId}", 
+                        currentPath, newFullPath, episode.Id);
+                    return;
+                }
             }
 
             if (dryRun)
