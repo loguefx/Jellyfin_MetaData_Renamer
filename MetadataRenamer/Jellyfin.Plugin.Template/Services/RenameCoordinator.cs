@@ -726,35 +726,6 @@ public class RenameCoordinator
             
             // Year is now optional - we'll handle it in the format rendering
 
-            // Track series update for bulk processing detection
-            var currentTime = DateTime.UtcNow;
-            _seriesUpdateTimestamps.Enqueue(currentTime);
-            
-            // Clean old timestamps outside the time window
-            while (_seriesUpdateTimestamps.Count > 0 && (currentTime - _seriesUpdateTimestamps.Peek()).TotalSeconds > BulkUpdateTimeWindowSeconds)
-            {
-                _seriesUpdateTimestamps.Dequeue();
-            }
-            
-            // Check if this looks like "Replace all metadata" (bulk refresh)
-            var isBulkRefresh = _seriesUpdateTimestamps.Count >= BulkUpdateThreshold;
-            var timeSinceLastBulkProcessing = (currentTime - _lastBulkProcessingUtc).TotalMinutes;
-            var shouldTriggerBulkProcessing = isBulkRefresh && timeSinceLastBulkProcessing >= BulkProcessingCooldownMinutes;
-            
-            if (shouldTriggerBulkProcessing)
-            {
-                _logger.LogInformation("[MR] === Bulk Refresh Detected (Replace All Metadata) ===");
-                _logger.LogInformation("[MR] Detected {Count} series updates in {Seconds} seconds", 
-                    _seriesUpdateTimestamps.Count, BulkUpdateTimeWindowSeconds);
-                _logger.LogInformation("[MR] Triggering bulk processing of all series in library...");
-                
-                _lastBulkProcessingUtc = currentTime;
-                _seriesUpdateTimestamps.Clear(); // Clear after triggering to avoid duplicate triggers
-                
-                // Process all series in the library asynchronously (don't block current processing)
-                Task.Run(() => ProcessAllSeriesInLibrary(cfg, currentTime));
-            }
-
             // Check if we should process during library scans
             // NEW LOGIC:
             // - Normal scans: Only process when provider IDs change (Identify flow)
@@ -817,6 +788,100 @@ public class RenameCoordinator
                 try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { runId = "run1", hypothesisId = "PROVIDER-HASH-CHECK", location = "RenameCoordinator.cs:777", message = "ERROR logging hash check", data = new { error = ex.Message }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
             }
             // #endregion
+
+            // Track series update for bulk processing detection
+            var currentTime = DateTime.UtcNow;
+            _seriesUpdateTimestamps.Enqueue(currentTime);
+
+            // Clean old timestamps outside the time window
+            while (_seriesUpdateTimestamps.Count > 0 && (currentTime - _seriesUpdateTimestamps.Peek()).TotalSeconds > BulkUpdateTimeWindowSeconds)
+            {
+                _seriesUpdateTimestamps.Dequeue();
+            }
+
+            // Check if this looks like "Replace all metadata" (bulk refresh)
+            // IMPORTANT: Only trigger bulk processing if provider IDs have NOT changed
+            // "Replace all metadata" updates metadata but doesn't change provider IDs
+            // "Identify" changes provider IDs, so we should NOT trigger bulk processing for it
+            var isBulkRefresh = _seriesUpdateTimestamps.Count >= BulkUpdateThreshold;
+            var timeSinceLastBulkProcessing = (currentTime - _lastBulkProcessingUtc).TotalMinutes;
+            var shouldTriggerBulkProcessing = isBulkRefresh &&
+                                             timeSinceLastBulkProcessing >= BulkProcessingCooldownMinutes &&
+                                             !providerIdsChanged &&
+                                             !isFirstTime; // Only trigger if provider IDs haven't changed (indicates "Replace all metadata", not "Identify")
+
+            // #region agent log - BULK-PROCESSING-DETECTION: Track bulk processing detection logic
+            try
+            {
+                _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] === Bulk Processing Detection ===");
+                _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] Series: {Name}, ID: {Id}", name ?? "NULL", series.Id);
+                _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] Series updates in queue: {Count}", _seriesUpdateTimestamps.Count);
+                _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] Bulk update threshold: {Threshold}", BulkUpdateThreshold);
+                _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] Time window: {Seconds} seconds", BulkUpdateTimeWindowSeconds);
+                _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] isBulkRefresh (count >= threshold): {IsBulkRefresh}", isBulkRefresh);
+                _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] Time since last bulk processing: {Minutes} minutes (cooldown: {CooldownMinutes} minutes)",
+                    timeSinceLastBulkProcessing, BulkProcessingCooldownMinutes);
+                _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] providerIdsChanged: {Changed}", providerIdsChanged);
+                _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] isFirstTime: {IsFirstTime}", isFirstTime);
+                _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] shouldTriggerBulkProcessing: {ShouldTrigger}", shouldTriggerBulkProcessing);
+                _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] Reason: {Reason}",
+                    shouldTriggerBulkProcessing
+                        ? "Bulk refresh detected (Replace all metadata)"
+                        : (isBulkRefresh
+                            ? (providerIdsChanged || isFirstTime
+                                ? "Provider IDs changed (Identify flow) - skipping bulk processing"
+                                : (timeSinceLastBulkProcessing < BulkProcessingCooldownMinutes
+                                    ? "Bulk processing on cooldown"
+                                    : "Unknown reason"))
+                            : "Not enough series updates to trigger bulk processing"));
+
+                var logData = new {
+                    runId = "run1",
+                    hypothesisId = "BULK-PROCESSING-DETECTION",
+                    location = "RenameCoordinator.cs:790",
+                    message = "Bulk processing detection",
+                    data = new {
+                        seriesId = series.Id.ToString(),
+                        seriesName = name ?? "NULL",
+                        seriesUpdatesInQueue = _seriesUpdateTimestamps.Count,
+                        bulkUpdateThreshold = BulkUpdateThreshold,
+                        bulkUpdateTimeWindowSeconds = BulkUpdateTimeWindowSeconds,
+                        isBulkRefresh = isBulkRefresh,
+                        timeSinceLastBulkProcessing = timeSinceLastBulkProcessing,
+                        bulkProcessingCooldownMinutes = BulkProcessingCooldownMinutes,
+                        providerIdsChanged = providerIdsChanged,
+                        isFirstTime = isFirstTime,
+                        shouldTriggerBulkProcessing = shouldTriggerBulkProcessing
+                    },
+                    timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                };
+                var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[MR] [DEBUG] [BULK-PROCESSING-DETECTION] ERROR logging bulk processing detection: {Error}", ex.Message);
+            }
+            // #endregion
+
+            if (shouldTriggerBulkProcessing)
+            {
+                _logger.LogInformation("[MR] === Bulk Refresh Detected (Replace All Metadata) ===");
+                _logger.LogInformation("[MR] Detected {Count} series updates in {Seconds} seconds",
+                    _seriesUpdateTimestamps.Count, BulkUpdateTimeWindowSeconds);
+                _logger.LogInformation("[MR] Provider IDs unchanged - this indicates 'Replace all metadata' operation");
+                _logger.LogInformation("[MR] Triggering bulk processing of all series in library...");
+
+                _lastBulkProcessingUtc = currentTime;
+                _seriesUpdateTimestamps.Clear(); // Clear after triggering to avoid duplicate triggers
+
+                // Process all series in the library asynchronously (don't block current processing)
+                Task.Run(() => ProcessAllSeriesInLibrary(cfg, currentTime));
+            }
+            else if (isBulkRefresh && (providerIdsChanged || isFirstTime))
+            {
+                _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] Skipping bulk processing - Provider IDs changed (Identify flow detected)");
+            }
 
             // Determine if we should proceed with rename
             bool shouldProceed = false;
@@ -1252,6 +1317,7 @@ public class RenameCoordinator
                 if (shouldReprocess)
                 {
                     _logger.LogInformation("[MR] === DECISION: Processing all episodes from all seasons ===");
+                    _logger.LogInformation("[MR] Series: {Name}, ID: {Id}", series.Name ?? "NULL", series.Id);
                     if (providerIdsChanged)
                     {
                         _logger.LogInformation("[MR] [DEBUG] Reason: Provider IDs changed (series identified)");
@@ -1259,6 +1325,10 @@ public class RenameCoordinator
                     else if (renameSuccessful)
                     {
                         _logger.LogInformation("[MR] [DEBUG] Reason: Series folder renamed");
+                    }
+                    else if (seriesRenameOnCooldown && cfg.ProcessDuringLibraryScans)
+                    {
+                        _logger.LogInformation("[MR] [DEBUG] Reason: Library scan in progress (ProcessDuringLibraryScans enabled)");
                     }
                     else
                     {
@@ -1558,12 +1628,36 @@ public class RenameCoordinator
                 .OrderBy(g => g.Key)
                 .ToList();
 
-            _logger.LogInformation("[MR] Episodes by season:");
+            _logger.LogInformation("[MR] === Episodes by Season (Detailed) ===");
+            _logger.LogInformation("[MR] Series: {Name}, ID: {Id}", series.Name ?? "NULL", series.Id);
+            _logger.LogInformation("[MR] Total seasons found: {SeasonCount}", episodesBySeason.Count);
             foreach (var seasonGroup in episodesBySeason)
             {
                 _logger.LogInformation("[MR]   Season {Season}: {Count} episodes", 
                     seasonGroup.Key.ToString(System.Globalization.CultureInfo.InvariantCulture), 
                     seasonGroup.Count().ToString(System.Globalization.CultureInfo.InvariantCulture));
+                foreach (var episode in seasonGroup.OrderBy(e => e.IndexNumber))
+                {
+                    _logger.LogInformation("[MR]     - S{Season:00}E{Episode:00}: {Name} (ID: {Id}, Path: {Path})", 
+                        episode.ParentIndexNumber, 
+                        episode.IndexNumber, 
+                        episode.Name ?? "NULL", 
+                        episode.Id,
+                        episode.Path ?? "NULL");
+                }
+            }
+            
+            // Log episodes without season numbers
+            var episodesWithoutSeasonNumbers = allEpisodes.Where(e => !e.ParentIndexNumber.HasValue).ToList();
+            if (episodesWithoutSeasonNumbers.Count > 0)
+            {
+                _logger.LogWarning("[MR] === Episodes Without Season Numbers ===");
+                _logger.LogWarning("[MR] Found {Count} episodes without ParentIndexNumber", episodesWithoutSeasonNumbers.Count);
+                foreach (var ep in episodesWithoutSeasonNumbers.Take(10))
+                {
+                    _logger.LogWarning("[MR]   - Episode ID: {Id}, Name: {Name}, IndexNumber: {IndexNumber}, Path: {Path}",
+                        ep.Id, ep.Name ?? "NULL", ep.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", ep.Path ?? "NULL");
+                }
             }
 
             // Process each episode
@@ -1604,13 +1698,21 @@ public class RenameCoordinator
                     }
 
                     // Log episode details before processing
-                    _logger.LogInformation("[MR] Episode metadata validated. Proceeding with rename processing...");
-                    _logger.LogInformation("[MR] Series: {SeriesName}", episode.Series?.Name ?? "NULL");
+                    _logger.LogInformation("[MR] === Episode Metadata Validated ===");
+                    _logger.LogInformation("[MR] Episode: {Name} (S{Season}E{Episode})", episodeName, seasonNum, episodeNum);
+                    _logger.LogInformation("[MR] Episode ID: {Id}", episode.Id);
+                    _logger.LogInformation("[MR] Episode Path: {Path}", episodePath);
+                    _logger.LogInformation("[MR] Series: {SeriesName} (ID: {SeriesId})", episode.Series?.Name ?? "NULL", episode.Series?.Id.ToString() ?? "NULL");
                     _logger.LogInformation("[MR] Series Path: {SeriesPath}", episode.Series?.Path ?? "NULL");
+                    _logger.LogInformation("[MR] Proceeding with rename processing...");
 
                     // Call HandleEpisodeUpdate for each episode
                     // This will apply the renaming logic and safety checks
+                    _logger.LogInformation("[MR] [DEBUG] [PROCESS-ALL-EPISODES] Calling HandleEpisodeUpdate for S{Season}E{Episode}: {Name}", 
+                        seasonNum, episodeNum, episodeName);
                     HandleEpisodeUpdate(episode, cfg, now, isBulkProcessing: true);
+                    _logger.LogInformation("[MR] [DEBUG] [PROCESS-ALL-EPISODES] HandleEpisodeUpdate completed for S{Season}E{Episode}: {Name}", 
+                        seasonNum, episodeNum, episodeName);
                     processedCount++;
                     
                     _logger.LogInformation("[MR] ✓ Successfully processed episode: {Name} (S{Season}E{Episode})", 
