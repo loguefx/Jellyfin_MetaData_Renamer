@@ -1609,9 +1609,63 @@ public class RenameCoordinator
                 
                 _logger.LogInformation("[MR] === Executing Episode Query ===");
                 _logger.LogInformation("[MR] Query: ParentId={ParentId}, Recursive={Recursive}", series.Id, true);
+                _logger.LogInformation("[MR] Series Path: {Path}", series.Path ?? "NULL");
+                _logger.LogInformation("[MR] LibraryManager Available: {Available}", _libraryManager != null);
+                
+                // #region agent log - EPISODE-QUERY-EXECUTION: Track episode query execution
+                try
+                {
+                    var logData = new {
+                        runId = "run1",
+                        hypothesisId = "EPISODE-QUERY-EXECUTION",
+                        location = "RenameCoordinator.cs:1613",
+                        message = "Executing episode query",
+                        data = new {
+                            seriesId = series.Id.ToString(),
+                            seriesName = series.Name ?? "NULL",
+                            seriesPath = series.Path ?? "NULL",
+                            queryParentId = series.Id.ToString(),
+                            queryRecursive = true,
+                            libraryManagerAvailable = _libraryManager != null
+                        },
+                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                    };
+                    var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                    try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+                }
+                catch (Exception logEx)
+                {
+                    _logger.LogError(logEx, "[MR] [DEBUG] [EPISODE-QUERY-EXECUTION] ERROR logging query execution: {Error}", logEx.Message);
+                }
+                // #endregion
                 
                 var allItems = _libraryManager.GetItemList(query);
                 _logger.LogInformation("[MR] Query returned {TotalItems} total items", allItems.Count);
+                
+                // #region agent log - EPISODE-QUERY-RESULT: Track query results
+                try
+                {
+                    var logData = new {
+                        runId = "run1",
+                        hypothesisId = "EPISODE-QUERY-RESULT",
+                        location = "RenameCoordinator.cs:1614",
+                        message = "Episode query result",
+                        data = new {
+                            seriesId = series.Id.ToString(),
+                            seriesName = series.Name ?? "NULL",
+                            totalItemsReturned = allItems.Count,
+                            itemTypes = allItems.GroupBy(item => item.GetType().Name).Select(g => new { type = g.Key, count = g.Count() }).ToList()
+                        },
+                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                    };
+                    var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                    try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+                }
+                catch (Exception logEx)
+                {
+                    _logger.LogError(logEx, "[MR] [DEBUG] [EPISODE-QUERY-RESULT] ERROR logging query result: {Error}", logEx.Message);
+                }
+                // #endregion
                 
                 // Log item types found
                 var itemTypes = allItems.GroupBy(item => item.GetType().Name).ToList();
@@ -1657,12 +1711,50 @@ public class RenameCoordinator
             }
             catch (Exception ex)
             {
+                // #region agent log - EPISODE-QUERY-ERROR: Track episode query errors
+                try
+                {
+                    _logger.LogError(ex, "[MR] [DEBUG] [EPISODE-QUERY-ERROR] ERROR retrieving episodes using GetItemList");
+                    _logger.LogError("[MR] [DEBUG] [EPISODE-QUERY-ERROR] Exception Type: {Type}", ex.GetType().FullName);
+                    _logger.LogError("[MR] [DEBUG] [EPISODE-QUERY-ERROR] Exception Message: {Message}", ex.Message);
+                    _logger.LogError("[MR] [DEBUG] [EPISODE-QUERY-ERROR] Stack Trace: {StackTrace}", ex.StackTrace ?? "N/A");
+                    _logger.LogError("[MR] [DEBUG] [EPISODE-QUERY-ERROR] Inner Exception: {InnerException}", ex.InnerException?.Message ?? "N/A");
+                    _logger.LogError("[MR] [DEBUG] [EPISODE-QUERY-ERROR] Series: {Name}, ID: {Id}, Path: {Path}", 
+                        series.Name ?? "NULL", series.Id, series.Path ?? "NULL");
+                    
+                    var logData = new {
+                        runId = "run1",
+                        hypothesisId = "EPISODE-QUERY-ERROR",
+                        location = "RenameCoordinator.cs:1658",
+                        message = "Error retrieving episodes - attempting fallback",
+                        data = new {
+                            seriesId = series.Id.ToString(),
+                            seriesName = series.Name ?? "NULL",
+                            seriesPath = series.Path ?? "NULL",
+                            exceptionType = ex.GetType().FullName,
+                            exceptionMessage = ex.Message,
+                            stackTrace = ex.StackTrace ?? "N/A",
+                            innerException = ex.InnerException?.Message ?? "N/A"
+                        },
+                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                    };
+                    var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                    try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+                }
+                catch (Exception logEx)
+                {
+                    _logger.LogError(logEx, "[MR] [DEBUG] [EPISODE-QUERY-ERROR] ERROR logging query error: {Error}", logEx.Message);
+                }
+                // #endregion
+                
                 _logger.LogWarning(ex, "[MR] Could not retrieve episodes using GetItemList. Trying alternative method: {Message}", ex.Message);
                 
                 // Fallback: Try to get episodes from series directly
                 // This is a fallback in case the query method doesn't work
                 try
                 {
+                    _logger.LogInformation("[MR] [DEBUG] Attempting fallback method to retrieve episodes");
+                    
                     // Get all items recursively and filter for episodes
                     // This should work even if IncludeItemTypes has issues
                     var query = new InternalItemsQuery
@@ -1675,10 +1767,68 @@ public class RenameCoordinator
                     allEpisodes = allItems.OfType<Episode>().ToList();
                     
                     _logger.LogInformation("[MR] Retrieved {Count} episodes using fallback recursive method", allEpisodes.Count);
+                    
+                    // #region agent log - EPISODE-QUERY-FALLBACK-SUCCESS: Track fallback success
+                    try
+                    {
+                        var logData = new {
+                            runId = "run1",
+                            hypothesisId = "EPISODE-QUERY-FALLBACK-SUCCESS",
+                            location = "RenameCoordinator.cs:1677",
+                            message = "Fallback method succeeded",
+                            data = new {
+                                seriesId = series.Id.ToString(),
+                                seriesName = series.Name ?? "NULL",
+                                episodesRetrieved = allEpisodes.Count
+                            },
+                            timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                        };
+                        var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                        try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+                    }
+                    catch (Exception logEx)
+                    {
+                        _logger.LogError(logEx, "[MR] [DEBUG] [EPISODE-QUERY-FALLBACK-SUCCESS] ERROR logging fallback success: {Error}", logEx.Message);
+                    }
+                    // #endregion
                 }
                 catch (Exception fallbackEx)
                 {
+                    // #region agent log - EPISODE-QUERY-FALLBACK-ERROR: Track fallback failure
+                    try
+                    {
+                        _logger.LogError(fallbackEx, "[MR] [DEBUG] [EPISODE-QUERY-FALLBACK-ERROR] ERROR in fallback method");
+                        _logger.LogError("[MR] [DEBUG] [EPISODE-QUERY-FALLBACK-ERROR] Exception Type: {Type}", fallbackEx.GetType().FullName);
+                        _logger.LogError("[MR] [DEBUG] [EPISODE-QUERY-FALLBACK-ERROR] Exception Message: {Message}", fallbackEx.Message);
+                        _logger.LogError("[MR] [DEBUG] [EPISODE-QUERY-FALLBACK-ERROR] Stack Trace: {StackTrace}", fallbackEx.StackTrace ?? "N/A");
+                        _logger.LogError("[MR] [DEBUG] [EPISODE-QUERY-FALLBACK-ERROR] Series: {Name}, ID: {Id}", series.Name ?? "NULL", series.Id);
+                        
+                        var logData = new {
+                            runId = "run1",
+                            hypothesisId = "EPISODE-QUERY-FALLBACK-ERROR",
+                            location = "RenameCoordinator.cs:1680",
+                            message = "Fallback method also failed - cannot retrieve episodes",
+                            data = new {
+                                seriesId = series.Id.ToString(),
+                                seriesName = series.Name ?? "NULL",
+                                exceptionType = fallbackEx.GetType().FullName,
+                                exceptionMessage = fallbackEx.Message,
+                                stackTrace = fallbackEx.StackTrace ?? "N/A",
+                                innerException = fallbackEx.InnerException?.Message ?? "N/A"
+                            },
+                            timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                        };
+                        var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                        try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+                    }
+                    catch (Exception logEx)
+                    {
+                        _logger.LogError(logEx, "[MR] [DEBUG] [EPISODE-QUERY-FALLBACK-ERROR] ERROR logging fallback error: {Error}", logEx.Message);
+                    }
+                    // #endregion
+                    
                     _logger.LogError(fallbackEx, "[MR] Could not retrieve episodes using fallback method: {Message}", fallbackEx.Message);
+                    _logger.LogError("[MR] [DEBUG] Cannot proceed with episode processing - both query methods failed");
                     return;
                 }
             }
@@ -1877,10 +2027,114 @@ public class RenameCoordinator
                     // This will apply the renaming logic and safety checks
                     _logger.LogInformation("[MR] [DEBUG] [PROCESS-ALL-EPISODES] Calling HandleEpisodeUpdate for S{Season}E{Episode}: {Name}", 
                         seasonNum, episodeNum, episodeName);
-                    HandleEpisodeUpdate(episode, cfg, now, isBulkProcessing: true);
-                    _logger.LogInformation("[MR] [DEBUG] [PROCESS-ALL-EPISODES] HandleEpisodeUpdate completed for S{Season}E{Episode}: {Name}", 
-                        seasonNum, episodeNum, episodeName);
-                    processedCount++;
+                    
+                    // #region agent log - EPISODE-PROCESSING-START: Track episode processing start
+                    try
+                    {
+                        var logData = new {
+                            runId = "run1",
+                            hypothesisId = "EPISODE-PROCESSING-START",
+                            location = "RenameCoordinator.cs:2029",
+                            message = "Starting HandleEpisodeUpdate for episode",
+                            data = new {
+                                episodeId = episode.Id.ToString(),
+                                episodeName = episodeName,
+                                seasonNumber = seasonNum,
+                                episodeNumber = episodeNum,
+                                episodePath = episodePath,
+                                seriesId = episode.Series?.Id.ToString() ?? "NULL",
+                                seriesName = episode.Series?.Name ?? "NULL"
+                            },
+                            timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                        };
+                        var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                        try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+                    }
+                    catch (Exception logEx)
+                    {
+                        _logger.LogError(logEx, "[MR] [DEBUG] [EPISODE-PROCESSING-START] ERROR logging processing start: {Error}", logEx.Message);
+                    }
+                    // #endregion
+                    
+                    try
+                    {
+                        HandleEpisodeUpdate(episode, cfg, now, isBulkProcessing: true);
+                        _logger.LogInformation("[MR] [DEBUG] [PROCESS-ALL-EPISODES] HandleEpisodeUpdate completed for S{Season}E{Episode}: {Name}", 
+                            seasonNum, episodeNum, episodeName);
+                        processedCount++;
+                        
+                        // #region agent log - EPISODE-PROCESSING-SUCCESS: Track successful episode processing
+                        try
+                        {
+                            var logData = new {
+                                runId = "run1",
+                                hypothesisId = "EPISODE-PROCESSING-SUCCESS",
+                                location = "RenameCoordinator.cs:2033",
+                                message = "HandleEpisodeUpdate completed successfully",
+                                data = new {
+                                    episodeId = episode.Id.ToString(),
+                                    episodeName = episodeName,
+                                    seasonNumber = seasonNum,
+                                    episodeNumber = episodeNum
+                                },
+                                timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                            };
+                            var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                            try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+                        }
+                        catch (Exception logEx)
+                        {
+                            _logger.LogError(logEx, "[MR] [DEBUG] [EPISODE-PROCESSING-SUCCESS] ERROR logging success: {Error}", logEx.Message);
+                        }
+                        // #endregion
+                    }
+                    catch (Exception episodeEx)
+                    {
+                        // #region agent log - EPISODE-PROCESSING-ERROR: Track episode processing errors
+                        try
+                        {
+                            _logger.LogError(episodeEx, "[MR] [DEBUG] [EPISODE-PROCESSING-ERROR] ERROR processing episode S{Season}E{Episode}: {Name}", 
+                                seasonNum, episodeNum, episodeName);
+                            _logger.LogError("[MR] [DEBUG] [EPISODE-PROCESSING-ERROR] Exception Type: {Type}", episodeEx.GetType().FullName);
+                            _logger.LogError("[MR] [DEBUG] [EPISODE-PROCESSING-ERROR] Exception Message: {Message}", episodeEx.Message);
+                            _logger.LogError("[MR] [DEBUG] [EPISODE-PROCESSING-ERROR] Stack Trace: {StackTrace}", episodeEx.StackTrace ?? "N/A");
+                            _logger.LogError("[MR] [DEBUG] [EPISODE-PROCESSING-ERROR] Inner Exception: {InnerException}", episodeEx.InnerException?.Message ?? "N/A");
+                            _logger.LogError("[MR] [DEBUG] [EPISODE-PROCESSING-ERROR] Episode ID: {Id}, Path: {Path}", episode.Id, episodePath);
+                            
+                            var logData = new {
+                                runId = "run1",
+                                hypothesisId = "EPISODE-PROCESSING-ERROR",
+                                location = "RenameCoordinator.cs:2030",
+                                message = "Error in HandleEpisodeUpdate",
+                                data = new {
+                                    episodeId = episode.Id.ToString(),
+                                    episodeName = episodeName,
+                                    seasonNumber = seasonNum,
+                                    episodeNumber = episodeNum,
+                                    episodePath = episodePath,
+                                    exceptionType = episodeEx.GetType().FullName,
+                                    exceptionMessage = episodeEx.Message,
+                                    stackTrace = episodeEx.StackTrace ?? "N/A",
+                                    innerException = episodeEx.InnerException?.Message ?? "N/A"
+                                },
+                                timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                            };
+                            var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                            try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+                        }
+                        catch (Exception logEx)
+                        {
+                            _logger.LogError(logEx, "[MR] [DEBUG] [EPISODE-PROCESSING-ERROR] ERROR logging processing error: {Error}", logEx.Message);
+                        }
+                        // #endregion
+                        
+                        skippedCount++;
+                        if (seasonNumber >= 0)
+                        {
+                            episodesSkippedBySeason.TryGetValue(seasonNumber, out var skipped);
+                            episodesSkippedBySeason[seasonNumber] = skipped + 1;
+                        }
+                    }
                     
                     // Track processed episodes by season
                     if (seasonNumber >= 0)
@@ -2006,6 +2260,42 @@ public class RenameCoordinator
         }
         catch (Exception ex)
         {
+            // #region agent log - PROCESS-ALL-EPISODES-ERROR: Track errors in ProcessAllEpisodesFromSeries
+            try
+            {
+                _logger.LogError(ex, "[MR] [DEBUG] [PROCESS-ALL-EPISODES-ERROR] ERROR in ProcessAllEpisodesFromSeries");
+                _logger.LogError("[MR] [DEBUG] [PROCESS-ALL-EPISODES-ERROR] Exception Type: {Type}", ex.GetType().FullName);
+                _logger.LogError("[MR] [DEBUG] [PROCESS-ALL-EPISODES-ERROR] Exception Message: {Message}", ex.Message);
+                _logger.LogError("[MR] [DEBUG] [PROCESS-ALL-EPISODES-ERROR] Stack Trace: {StackTrace}", ex.StackTrace ?? "N/A");
+                _logger.LogError("[MR] [DEBUG] [PROCESS-ALL-EPISODES-ERROR] Inner Exception: {InnerException}", ex.InnerException?.Message ?? "N/A");
+                _logger.LogError("[MR] [DEBUG] [PROCESS-ALL-EPISODES-ERROR] Series: {Name}, ID: {Id}, Path: {Path}", 
+                    series.Name ?? "NULL", series.Id, series.Path ?? "NULL");
+                
+                var logData = new {
+                    runId = "run1",
+                    hypothesisId = "PROCESS-ALL-EPISODES-ERROR",
+                    location = "RenameCoordinator.cs:1551",
+                    message = "Error in ProcessAllEpisodesFromSeries",
+                    data = new {
+                        seriesId = series.Id.ToString(),
+                        seriesName = series.Name ?? "NULL",
+                        seriesPath = series.Path ?? "NULL",
+                        exceptionType = ex.GetType().FullName,
+                        exceptionMessage = ex.Message,
+                        stackTrace = ex.StackTrace ?? "N/A",
+                        innerException = ex.InnerException?.Message ?? "N/A"
+                    },
+                    timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                };
+                var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+            }
+            catch (Exception logEx)
+            {
+                _logger.LogError(logEx, "[MR] [DEBUG] [PROCESS-ALL-EPISODES-ERROR] ERROR logging process error: {Error}", logEx.Message);
+            }
+            // #endregion
+            
             _logger.LogError(ex, "[MR] ERROR in ProcessAllEpisodesFromSeries: {Message}", ex.Message);
             _logger.LogError("[MR] Stack Trace: {StackTrace}", ex.StackTrace ?? "N/A");
         }
@@ -2801,12 +3091,146 @@ public class RenameCoordinator
             _logger.LogInformation("[MR] Format: {Format}", cfg.SeasonFolderFormat);
             _logger.LogInformation("[MR] Dry Run Mode: {DryRun}", cfg.DryRun);
 
-            _pathRenamer.TryRenameSeasonFolder(season, desiredFolderName, cfg.DryRun);
+            // #region agent log - SEASON-FOLDER-RENAME-START: Track season folder rename start
+            try
+            {
+                _logger.LogInformation("[MR] [DEBUG] [SEASON-FOLDER-RENAME-START] Starting season folder rename");
+                _logger.LogInformation("[MR] [DEBUG] [SEASON-FOLDER-RENAME-START] Season: {Name}, ID: {Id}, Season Number: {SeasonNumber}", 
+                    season.Name ?? "NULL", season.Id, season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+                _logger.LogInformation("[MR] [DEBUG] [SEASON-FOLDER-RENAME-START] Current Path: {Path}", season.Path ?? "NULL");
+                _logger.LogInformation("[MR] [DEBUG] [SEASON-FOLDER-RENAME-START] Desired Folder Name: {Desired}", desiredFolderName);
+                
+                var logData = new {
+                    runId = "run1",
+                    hypothesisId = "SEASON-FOLDER-RENAME-START",
+                    location = "RenameCoordinator.cs:3058",
+                    message = "Starting season folder rename",
+                    data = new {
+                        seasonId = season.Id.ToString(),
+                        seasonName = season.Name ?? "NULL",
+                        seasonNumber = season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                        seasonPath = season.Path ?? "NULL",
+                        desiredFolderName = desiredFolderName,
+                        dryRun = cfg.DryRun
+                    },
+                    timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                };
+                var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+            }
+            catch (Exception logEx)
+            {
+                _logger.LogError(logEx, "[MR] [DEBUG] [SEASON-FOLDER-RENAME-START] ERROR logging rename start: {Error}", logEx.Message);
+            }
+            // #endregion
+            
+            try
+            {
+                _pathRenamer.TryRenameSeasonFolder(season, desiredFolderName, cfg.DryRun);
+                
+                // #region agent log - SEASON-FOLDER-RENAME-SUCCESS: Track successful season folder rename
+                try
+                {
+                    _logger.LogInformation("[MR] [DEBUG] [SEASON-FOLDER-RENAME-SUCCESS] Season folder rename completed");
+                    
+                    var logData = new {
+                        runId = "run1",
+                        hypothesisId = "SEASON-FOLDER-RENAME-SUCCESS",
+                        location = "RenameCoordinator.cs:3058",
+                        message = "Season folder rename completed successfully",
+                        data = new {
+                            seasonId = season.Id.ToString(),
+                            seasonName = season.Name ?? "NULL",
+                            seasonNumber = season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                            desiredFolderName = desiredFolderName
+                        },
+                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                    };
+                    var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                    try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+                }
+                catch (Exception logEx)
+                {
+                    _logger.LogError(logEx, "[MR] [DEBUG] [SEASON-FOLDER-RENAME-SUCCESS] ERROR logging rename success: {Error}", logEx.Message);
+                }
+                // #endregion
+            }
+            catch (Exception seasonRenameEx)
+            {
+                // #region agent log - SEASON-FOLDER-RENAME-ERROR: Track season folder rename errors
+                try
+                {
+                    _logger.LogError(seasonRenameEx, "[MR] [DEBUG] [SEASON-FOLDER-RENAME-ERROR] ERROR renaming season folder");
+                    _logger.LogError("[MR] [DEBUG] [SEASON-FOLDER-RENAME-ERROR] Exception Type: {Type}", seasonRenameEx.GetType().FullName);
+                    _logger.LogError("[MR] [DEBUG] [SEASON-FOLDER-RENAME-ERROR] Exception Message: {Message}", seasonRenameEx.Message);
+                    _logger.LogError("[MR] [DEBUG] [SEASON-FOLDER-RENAME-ERROR] Stack Trace: {StackTrace}", seasonRenameEx.StackTrace ?? "N/A");
+                    _logger.LogError("[MR] [DEBUG] [SEASON-FOLDER-RENAME-ERROR] Season: {Name}, ID: {Id}, Season Number: {SeasonNumber}", 
+                        season.Name ?? "NULL", season.Id, season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+                    
+                    var logData = new {
+                        runId = "run1",
+                        hypothesisId = "SEASON-FOLDER-RENAME-ERROR",
+                        location = "RenameCoordinator.cs:3058",
+                        message = "Error renaming season folder",
+                        data = new {
+                            seasonId = season.Id.ToString(),
+                            seasonName = season.Name ?? "NULL",
+                            seasonNumber = season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                            seasonPath = season.Path ?? "NULL",
+                            desiredFolderName = desiredFolderName,
+                            exceptionType = seasonRenameEx.GetType().FullName,
+                            exceptionMessage = seasonRenameEx.Message,
+                            stackTrace = seasonRenameEx.StackTrace ?? "N/A",
+                            innerException = seasonRenameEx.InnerException?.Message ?? "N/A"
+                        },
+                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                    };
+                    var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                    try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+                }
+                catch (Exception logEx)
+                {
+                    _logger.LogError(logEx, "[MR] [DEBUG] [SEASON-FOLDER-RENAME-ERROR] ERROR logging rename error: {Error}", logEx.Message);
+                }
+                // #endregion
+                
+                _logger.LogError(seasonRenameEx, "[MR] ERROR renaming season folder: {Message}", seasonRenameEx.Message);
+            }
 
             _logger.LogInformation("[MR] ===== Season Processing Complete =====");
         }
         catch (Exception ex)
         {
+            // #region agent log - SEASON-UPDATE-ERROR: Track errors in HandleSeasonUpdate
+            try
+            {
+                _logger.LogError(ex, "[MR] [DEBUG] [SEASON-UPDATE-ERROR] ERROR in HandleSeasonUpdate");
+                _logger.LogError("[MR] [DEBUG] [SEASON-UPDATE-ERROR] Exception Type: {Type}", ex.GetType().FullName);
+                _logger.LogError("[MR] [DEBUG] [SEASON-UPDATE-ERROR] Exception Message: {Message}", ex.Message);
+                _logger.LogError("[MR] [DEBUG] [SEASON-UPDATE-ERROR] Stack Trace: {StackTrace}", ex.StackTrace ?? "N/A");
+                
+                var logData = new {
+                    runId = "run1",
+                    hypothesisId = "SEASON-UPDATE-ERROR",
+                    location = "RenameCoordinator.cs:2991",
+                    message = "Error in HandleSeasonUpdate",
+                    data = new {
+                        exceptionType = ex.GetType().FullName,
+                        exceptionMessage = ex.Message,
+                        stackTrace = ex.StackTrace ?? "N/A",
+                        innerException = ex.InnerException?.Message ?? "N/A"
+                    },
+                    timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                };
+                var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+            }
+            catch (Exception logEx)
+            {
+                _logger.LogError(logEx, "[MR] [DEBUG] [SEASON-UPDATE-ERROR] ERROR logging season update error: {Error}", logEx.Message);
+            }
+            // #endregion
+            
             _logger.LogError(ex, "[MR] ERROR in HandleSeasonUpdate: {Message}", ex.Message);
             _logger.LogError("[MR] Stack Trace: {StackTrace}", ex.StackTrace ?? "N/A");
         }
