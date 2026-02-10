@@ -405,6 +405,35 @@ public class RenameCoordinator
             // Handle Series items
             if (e.Item is Series series)
             {
+                // #region agent log - SERIES-ITEM-UPDATED: Track all series ItemUpdated events
+                try
+                {
+                    var logData = new { 
+                        runId = "run1", 
+                        hypothesisId = "SERIES-ITEM-UPDATED", 
+                        location = "RenameCoordinator.cs:406", 
+                        message = "Series ItemUpdated event received", 
+                        data = new { 
+                            seriesId = series.Id.ToString(),
+                            seriesName = series.Name ?? "NULL",
+                            seriesPath = series.Path ?? "NULL",
+                            providerIdsCount = series.ProviderIds?.Count ?? 0,
+                            providerIds = series.ProviderIds != null ? string.Join(",", series.ProviderIds.Select(kv => $"{kv.Key}={kv.Value}")) : "null"
+                        }, 
+                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() 
+                    };
+                    var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                    try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+                    _logger.LogInformation("[MR] [DEBUG] [SERIES-ITEM-UPDATED] Series ItemUpdated: Id={Id}, Name='{Name}', Path={Path}, ProviderIds={ProviderIds}",
+                        series.Id, series.Name ?? "NULL", series.Path ?? "NULL",
+                        series.ProviderIds != null ? string.Join(",", series.ProviderIds.Select(kv => $"{kv.Key}={kv.Value}")) : "NONE");
+                }
+                catch (Exception ex)
+                {
+                    try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { runId = "run1", hypothesisId = "SERIES-ITEM-UPDATED", location = "RenameCoordinator.cs:406", message = "ERROR logging series event", data = new { error = ex.Message }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+                }
+                // #endregion
+                
                 // Debounce global spam for Series items only
                 var timeSinceLastAction = now - _lastGlobalActionUtc;
                 if (timeSinceLastAction < _globalMinInterval)
@@ -744,6 +773,42 @@ public class RenameCoordinator
             _logger.LogInformation("[MR] New Hash: {NewHash}", newHash);
             _logger.LogInformation("[MR] Provider IDs Changed: {Changed}, First Time: {FirstTime}", providerIdsChanged, isFirstTime);
             _logger.LogInformation("[MR] Series: {Name}", name);
+            
+            // #region agent log - PROVIDER-HASH-CHECK: Track provider hash state
+            try
+            {
+                _logger.LogInformation("[MR] [DEBUG] [PROVIDER-HASH-CHECK] Provider hash check state: SeriesId={SeriesId}, SeriesName='{SeriesName}', OnlyRenameWhenProviderIdsChange={OnlyRenameWhenProviderIdsChange}, HasProviderIds={HasProviderIds}, HasOldHash={HasOldHash}, OldHash={OldHash}, NewHash={NewHash}, ProviderIdsChanged={ProviderIdsChanged}, IsFirstTime={IsFirstTime}, ForceProcessing={ForceProcessing}",
+                    series.Id, name ?? "NULL", cfg.OnlyRenameWhenProviderIdsChange, hasProviderIds, hasOldHash, oldHash ?? "(none)", newHash, providerIdsChanged, isFirstTime, forceProcessing);
+                
+                var logData = new { 
+                    runId = "run1", 
+                    hypothesisId = "PROVIDER-HASH-CHECK", 
+                    location = "RenameCoordinator.cs:777", 
+                    message = "Provider hash check state", 
+                    data = new { 
+                        seriesId = series.Id.ToString(),
+                        seriesName = name ?? "NULL",
+                        processDuringLibraryScans = cfg.ProcessDuringLibraryScans,
+                        onlyRenameWhenProviderIdsChange = cfg.OnlyRenameWhenProviderIdsChange,
+                        hasProviderIds = hasProviderIds,
+                        hasOldHash = hasOldHash,
+                        oldHash = oldHash ?? "(none)",
+                        newHash = newHash,
+                        providerIdsChanged = providerIdsChanged,
+                        isFirstTime = isFirstTime,
+                        forceProcessing = forceProcessing
+                    }, 
+                    timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() 
+                };
+                var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[MR] [DEBUG] [PROVIDER-HASH-CHECK] ERROR logging hash check: {Error}", ex.Message);
+                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { runId = "run1", hypothesisId = "PROVIDER-HASH-CHECK", location = "RenameCoordinator.cs:777", message = "ERROR logging hash check", data = new { error = ex.Message }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+            }
+            // #endregion
 
             // Determine if we should proceed with rename
             bool shouldProceed = false;
@@ -780,11 +845,67 @@ public class RenameCoordinator
                 shouldProceed = true;
                 proceedReason = "OnlyRenameWhenProviderIdsChange disabled";
             }
+            
+            // #region agent log - SHOULD-PROCEED-DECISION: Track shouldProceed decision
+            try
+            {
+                var logData = new { 
+                    runId = "run1", 
+                    hypothesisId = "SHOULD-PROCEED-DECISION", 
+                    location = "RenameCoordinator.cs:749", 
+                    message = "shouldProceed decision made", 
+                    data = new { 
+                        seriesId = series.Id.ToString(),
+                        seriesName = name ?? "NULL",
+                        shouldProceed = shouldProceed,
+                        proceedReason = proceedReason,
+                        onlyRenameWhenProviderIdsChange = cfg.OnlyRenameWhenProviderIdsChange,
+                        forceProcessing = forceProcessing,
+                        providerIdsChanged = providerIdsChanged,
+                        isFirstTime = isFirstTime
+                    }, 
+                    timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() 
+                };
+                var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+                _logger.LogInformation("[MR] [DEBUG] [SHOULD-PROCEED-DECISION] shouldProceed={ShouldProceed}, Reason='{Reason}'", shouldProceed, proceedReason);
+            }
+            catch (Exception ex)
+            {
+                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { runId = "run1", hypothesisId = "SHOULD-PROCEED-DECISION", location = "RenameCoordinator.cs:749", message = "ERROR logging shouldProceed", data = new { error = ex.Message }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+            }
+            // #endregion
 
             if (!shouldProceed)
             {
-                // #region agent log
-                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "B", location = "RenameCoordinator.cs:138", message = "SKIP: ProviderIds unchanged", data = new { seriesName = name, hash = newHash, reason = proceedReason }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+                // #region agent log - SKIP-SERIES-PROCESSING: Track when series processing is skipped
+                try
+                {
+                    var logData = new { 
+                        runId = "run1", 
+                        hypothesisId = "SKIP-SERIES-PROCESSING", 
+                        location = "RenameCoordinator.cs:784", 
+                        message = "Series processing skipped - shouldProceed=false", 
+                        data = new { 
+                            seriesId = series.Id.ToString(),
+                            seriesName = name ?? "NULL",
+                            hash = newHash,
+                            reason = proceedReason,
+                            onlyRenameWhenProviderIdsChange = cfg.OnlyRenameWhenProviderIdsChange,
+                            providerIdsChanged = providerIdsChanged,
+                            isFirstTime = isFirstTime,
+                            forceProcessing = forceProcessing
+                        }, 
+                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() 
+                    };
+                    var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                    try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+                    _logger.LogWarning("[MR] [DEBUG] [SKIP-SERIES-PROCESSING] SKIP: {Reason}. Name={Name}, Hash={Hash}", proceedReason, name, newHash);
+                }
+                catch (Exception ex)
+                {
+                    try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { runId = "run1", hypothesisId = "SKIP-SERIES-PROCESSING", location = "RenameCoordinator.cs:784", message = "ERROR logging skip", data = new { error = ex.Message }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+                }
                 // #endregion
                 _logger.LogWarning("[MR] SKIP: {Reason}. Name={Name}, Hash={Hash}", proceedReason, name, newHash);
                 _logger.LogInformation("[MR] ===== Processing Complete (Skipped) =====");
@@ -1157,6 +1278,35 @@ public class RenameCoordinator
                 {
                     _logger.LogInformation("[MR] === DECISION: Skipping episode processing (already processed recently) ===");
                     _logger.LogInformation("[MR] [DEBUG] Series {Id} was already processed. Skipping to avoid duplicate processing.", series.Id);
+                    
+                    // #region agent log - SKIP-EPISODE-PROCESSING: Track when episode processing is skipped
+                    try
+                    {
+                        _logger.LogInformation("[MR] [DEBUG] [SKIP-EPISODE-PROCESSING] Episode processing skipped for series: SeriesId={SeriesId}, SeriesName='{SeriesName}', ProviderIdsChanged={ProviderIdsChanged}, AlreadyProcessed={AlreadyProcessed}, RenameSuccessful={RenameSuccessful}",
+                            series.Id, series.Name ?? "NULL", providerIdsChanged, _seriesProcessedForEpisodes.Contains(series.Id), renameSuccessful);
+                        
+                        var logData = new { 
+                            runId = "run1", 
+                            hypothesisId = "SKIP-EPISODE-PROCESSING", 
+                            location = "RenameCoordinator.cs:1273", 
+                            message = "Episode processing skipped - already processed", 
+                            data = new { 
+                                seriesId = series.Id.ToString(),
+                                seriesName = series.Name ?? "NULL",
+                                providerIdsChanged = providerIdsChanged,
+                                alreadyProcessed = _seriesProcessedForEpisodes.Contains(series.Id),
+                                renameSuccessful = renameSuccessful
+                            }, 
+                            timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() 
+                        };
+                        var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                        try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "[MR] [DEBUG] [SKIP-EPISODE-PROCESSING] ERROR logging skip: {Error}", ex.Message);
+                    }
+                    // #endregion
                 }
             }
             else
@@ -1185,9 +1335,42 @@ public class RenameCoordinator
     {
         try
         {
+            // #region agent log - PROCESS-ALL-EPISODES-ENTRY: Track ProcessAllEpisodesFromSeries entry
+            try
+            {
+                _logger.LogInformation("[MR] [DEBUG] [PROCESS-ALL-EPISODES-ENTRY] ===== ProcessAllEpisodesFromSeries ENTRY =====");
+                _logger.LogInformation("[MR] [DEBUG] [PROCESS-ALL-EPISODES-ENTRY] Series: {Name}, ID: {Id}, Path: {Path}", 
+                    series.Name ?? "NULL", series.Id, series.Path ?? "NULL");
+                _logger.LogInformation("[MR] [DEBUG] [PROCESS-ALL-EPISODES-ENTRY] RenameEpisodeFiles: {RenameEpisodeFiles}, DryRun: {DryRun}", 
+                    cfg.RenameEpisodeFiles, cfg.DryRun);
+                
+                var logData = new { 
+                    runId = "run1", 
+                    hypothesisId = "PROCESS-ALL-EPISODES-ENTRY", 
+                    location = "RenameCoordinator.cs:1305", 
+                    message = "ProcessAllEpisodesFromSeries entry", 
+                    data = new { 
+                        seriesId = series.Id.ToString(),
+                        seriesName = series.Name ?? "NULL",
+                        seriesPath = series.Path ?? "NULL",
+                        renameEpisodeFiles = cfg.RenameEpisodeFiles,
+                        dryRun = cfg.DryRun,
+                        libraryManagerAvailable = _libraryManager != null
+                    }, 
+                    timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() 
+                };
+                var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[MR] [DEBUG] [PROCESS-ALL-EPISODES-ENTRY] ERROR logging entry: {Error}", ex.Message);
+            }
+            // #endregion
+            
             if (_libraryManager == null)
             {
-                _logger.LogWarning("[MR] LibraryManager is not available. Cannot process all episodes from series. Episodes will be processed individually as ItemUpdated events are received.");
+                _logger.LogWarning("[MR] [DEBUG] [PROCESS-ALL-EPISODES-ENTRY] LibraryManager is not available. Cannot process all episodes from series. Episodes will be processed individually as ItemUpdated events are received.");
                 return;
             }
 
@@ -1423,6 +1606,37 @@ public class RenameCoordinator
             _logger.LogInformation("[MR] Successfully processed: {Processed}", processedCount);
             _logger.LogInformation("[MR] Skipped: {Skipped}", skippedCount);
             _logger.LogInformation("[MR] === All Episodes Processing Complete ===");
+            
+            // #region agent log - PROCESS-ALL-EPISODES-COMPLETE: Track ProcessAllEpisodesFromSeries completion
+            try
+            {
+                _logger.LogInformation("[MR] [DEBUG] [PROCESS-ALL-EPISODES-COMPLETE] ===== ProcessAllEpisodesFromSeries COMPLETE =====");
+                _logger.LogInformation("[MR] [DEBUG] [PROCESS-ALL-EPISODES-COMPLETE] Series: {Name}, ID: {Id}", series.Name ?? "NULL", series.Id);
+                _logger.LogInformation("[MR] [DEBUG] [PROCESS-ALL-EPISODES-COMPLETE] Total episodes found: {Total}, Processed: {Processed}, Skipped: {Skipped}",
+                    allEpisodes.Count, processedCount, skippedCount);
+                
+                var logData = new { 
+                    runId = "run1", 
+                    hypothesisId = "PROCESS-ALL-EPISODES-COMPLETE", 
+                    location = "RenameCoordinator.cs:1575", 
+                    message = "ProcessAllEpisodesFromSeries complete", 
+                    data = new { 
+                        seriesId = series.Id.ToString(),
+                        seriesName = series.Name ?? "NULL",
+                        totalEpisodes = allEpisodes.Count,
+                        processedCount = processedCount,
+                        skippedCount = skippedCount
+                    }, 
+                    timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() 
+                };
+                var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[MR] [DEBUG] [PROCESS-ALL-EPISODES-COMPLETE] ERROR logging completion: {Error}", ex.Message);
+            }
+            // #endregion
 
             // Process retry queue after processing all episodes
             ProcessRetryQueue(cfg, now);
@@ -2225,8 +2439,35 @@ public class RenameCoordinator
             var seasonNum = episode.ParentIndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL";
             var episodeNum = episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL";
             
-            // #region agent log
-            try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "A", location = "RenameCoordinator.cs:439", message = "HandleEpisodeUpdate entry", data = new { episodeId = episode.Id.ToString(), episodeName = episode.Name ?? "NULL", episodePath = episode.Path ?? "NULL", episodeType = episode.GetType().FullName, seasonNumber = seasonNum, episodeNumber = episodeNum, isBulkProcessing = isBulkProcessing }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+            // #region agent log - EPISODE-UPDATE-ENTRY: Track all HandleEpisodeUpdate calls
+            try
+            {
+                _logger.LogInformation("[MR] [DEBUG] [EPISODE-UPDATE-ENTRY] HandleEpisodeUpdate called: EpisodeId={EpisodeId}, EpisodeName='{EpisodeName}', Season={Season}, Episode={Episode}, Path={Path}, IsBulkProcessing={IsBulkProcessing}",
+                    episode.Id, episode.Name ?? "NULL", seasonNum, episodeNum, episode.Path ?? "NULL", isBulkProcessing);
+                
+                var logData = new { 
+                    runId = "run1", 
+                    hypothesisId = "EPISODE-UPDATE-ENTRY", 
+                    location = "RenameCoordinator.cs:2342", 
+                    message = "HandleEpisodeUpdate entry", 
+                    data = new { 
+                        episodeId = episode.Id.ToString(), 
+                        episodeName = episode.Name ?? "NULL", 
+                        episodePath = episode.Path ?? "NULL", 
+                        episodeType = episode.GetType().FullName, 
+                        seasonNumber = seasonNum, 
+                        episodeNumber = episodeNum, 
+                        isBulkProcessing = isBulkProcessing 
+                    }, 
+                    timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() 
+                };
+                var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[MR] [DEBUG] [EPISODE-UPDATE-ENTRY] ERROR logging entry: {Error}", ex.Message);
+            }
             // #endregion
             
             _logger.LogInformation("[MR] ===== HandleEpisodeUpdate Entry =====");
