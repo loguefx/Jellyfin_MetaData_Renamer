@@ -25,6 +25,16 @@ public class RenameCoordinator
     private readonly Dictionary<Guid, string> _providerHashByItem = new();
     private readonly Dictionary<Guid, Dictionary<string, string>> _previousProviderIdsByItem = new();
 
+    // Episode retry queue for episodes with incomplete metadata
+    private readonly Dictionary<Guid, DateTime> _episodeRetryQueue = new(); // Episode ID -> Last retry attempt
+    private readonly Dictionary<Guid, int> _episodeRetryCount = new(); // Episode ID -> Retry count
+    private readonly Dictionary<Guid, string> _episodeRetryReason = new(); // Episode ID -> Reason for queuing
+    private const int MaxRetryAttempts = 10;
+    private const int RetryDelayMinutes = 5;
+
+    // Track series that have been processed for episodes
+    private readonly HashSet<Guid> _seriesProcessedForEpisodes = new();
+
     // global debounce
     private DateTime _lastGlobalActionUtc = DateTime.MinValue;
 
@@ -51,6 +61,10 @@ public class RenameCoordinator
             _lastAttemptUtcByItem.Clear();
             _providerHashByItem.Clear();
             _previousProviderIdsByItem.Clear();
+            _episodeRetryQueue.Clear();
+            _episodeRetryCount.Clear();
+            _episodeRetryReason.Clear();
+            _seriesProcessedForEpisodes.Clear();
             _lastGlobalActionUtc = DateTime.MinValue;
             _logger?.LogInformation("[MR] RenameCoordinator state cleared");
         }
@@ -58,6 +72,254 @@ public class RenameCoordinator
         {
             _logger?.LogWarning(ex, "[MR] Error clearing RenameCoordinator state: {Message}", ex.Message);
         }
+    }
+
+    /// <summary>
+    /// Queues an episode for retry when metadata is incomplete.
+    /// </summary>
+    /// <param name="episode">The episode to queue.</param>
+    /// <param name="reason">The reason for queuing.</param>
+    private void QueueEpisodeForRetry(Episode episode, string reason)
+    {
+        try
+        {
+            if (!_episodeRetryQueue.ContainsKey(episode.Id))
+            {
+                _episodeRetryQueue[episode.Id] = DateTime.UtcNow;
+                _episodeRetryCount[episode.Id] = 0;
+                _episodeRetryReason[episode.Id] = reason;
+                _logger.LogInformation("[MR] [DEBUG] === Episode Queued for Retry ===");
+                _logger.LogInformation("[MR] [DEBUG] Episode ID: {Id}", episode.Id);
+                _logger.LogInformation("[MR] [DEBUG] Episode Name: {Name}", episode.Name ?? "NULL");
+                _logger.LogInformation("[MR] [DEBUG] Episode Path: {Path}", episode.Path ?? "NULL");
+                _logger.LogInformation("[MR] [DEBUG] Season: {Season}, Episode: {Episode}", 
+                    episode.ParentIndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                    episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+                _logger.LogInformation("[MR] [DEBUG] Reason: {Reason}", reason);
+                _logger.LogInformation("[MR] [DEBUG] Retry delay: {Minutes} minutes", RetryDelayMinutes);
+                _logger.LogInformation("[MR] [DEBUG] Max retry attempts: {MaxAttempts}", MaxRetryAttempts);
+                _logger.LogInformation("[MR] [DEBUG] Current queue size: {QueueSize}", _episodeRetryQueue.Count);
+                _logger.LogInformation("[MR] [DEBUG] Will retry after {Minutes} minutes or on next ItemUpdated event", RetryDelayMinutes);
+                _logger.LogInformation("[MR] [DEBUG] === Episode Queued for Retry Complete ===");
+            }
+            else
+            {
+                // Update retry count
+                var currentCount = _episodeRetryCount.GetValueOrDefault(episode.Id, 0);
+                _logger.LogInformation("[MR] [DEBUG] Episode {Id} already in retry queue. Current retry count: {Count}/{MaxAttempts}", 
+                    episode.Id, currentCount, MaxRetryAttempts);
+                _logger.LogInformation("[MR] [DEBUG] Previous reason: {Reason}", _episodeRetryReason.GetValueOrDefault(episode.Id, "Unknown"));
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[MR] Error queuing episode for retry: {Message}", ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Processes the episode retry queue, attempting to rename episodes that were previously skipped due to incomplete metadata.
+    /// </summary>
+    /// <param name="cfg">The plugin configuration.</param>
+    /// <param name="now">The current UTC time.</param>
+    private void ProcessRetryQueue(PluginConfiguration cfg, DateTime now)
+    {
+        try
+        {
+            if (!cfg.RenameEpisodeFiles || cfg.DryRun)
+            {
+                _logger.LogDebug("[MR] [DEBUG] ProcessRetryQueue: Skipping (RenameEpisodeFiles={RenameEpisodes}, DryRun={DryRun})", 
+                    cfg.RenameEpisodeFiles, cfg.DryRun);
+                return;
+            }
+
+            if (_episodeRetryQueue.Count == 0)
+            {
+                _logger.LogDebug("[MR] [DEBUG] ProcessRetryQueue: Queue is empty, nothing to process");
+                return;
+            }
+
+            _logger.LogInformation("[MR] [DEBUG] === Processing Episode Retry Queue ===");
+            _logger.LogInformation("[MR] [DEBUG] Episodes in queue: {Count}", _episodeRetryQueue.Count);
+            _logger.LogInformation("[MR] [DEBUG] Current time: {Now}", now.ToString("yyyy-MM-dd HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture));
+
+            var episodesToRetry = new List<Guid>();
+            var episodesToRemove = new List<Guid>();
+
+            _logger.LogInformation("[MR] [DEBUG] Evaluating {Count} episodes in queue", _episodeRetryQueue.Count);
+            
+            foreach (var kvp in _episodeRetryQueue.ToList())
+            {
+                var episodeId = kvp.Key;
+                var lastRetry = kvp.Value;
+                var retryCount = _episodeRetryCount.GetValueOrDefault(episodeId, 0);
+                var reason = _episodeRetryReason.GetValueOrDefault(episodeId, "Unknown");
+
+                // Check if enough time has passed since last retry
+                var timeSinceLastRetry = now - lastRetry;
+                var shouldRetry = timeSinceLastRetry.TotalMinutes >= RetryDelayMinutes;
+
+                _logger.LogInformation("[MR] [DEBUG] Episode {Id}: Retry count={Count}/{Max}, Time since last retry={Minutes:F1} min, Should retry={ShouldRetry}", 
+                    episodeId, retryCount, MaxRetryAttempts, timeSinceLastRetry.TotalMinutes, shouldRetry);
+                _logger.LogInformation("[MR] [DEBUG] Episode {Id}: Reason={Reason}", episodeId, reason);
+
+                if (retryCount >= MaxRetryAttempts)
+                {
+                    _logger.LogWarning("[MR] [DEBUG] Removing episode {Id} from retry queue: Max retry attempts ({MaxAttempts}) reached", 
+                        episodeId, MaxRetryAttempts);
+                    episodesToRemove.Add(episodeId);
+                    continue;
+                }
+
+                if (shouldRetry)
+                {
+                    _logger.LogInformation("[MR] [DEBUG] Episode {Id} will be retried (enough time has passed)", episodeId);
+                    episodesToRetry.Add(episodeId);
+                }
+                else
+                {
+                    _logger.LogInformation("[MR] [DEBUG] Episode {Id} will not be retried yet (only {Minutes:F1} minutes since last retry, need {RequiredMinutes} minutes)", 
+                        episodeId, timeSinceLastRetry.TotalMinutes, RetryDelayMinutes);
+                }
+            }
+
+            // Remove episodes that exceeded max attempts
+            foreach (var episodeId in episodesToRemove)
+            {
+                _episodeRetryQueue.Remove(episodeId);
+                _episodeRetryCount.Remove(episodeId);
+                _episodeRetryReason.Remove(episodeId);
+            }
+
+            // Retry episodes
+            if (episodesToRetry.Count > 0 && _libraryManager != null)
+            {
+                _logger.LogInformation("[MR] [DEBUG] Retrying {Count} episodes from queue", episodesToRetry.Count);
+
+                foreach (var episodeId in episodesToRetry)
+                {
+                    try
+                    {
+                        _logger.LogInformation("[MR] [DEBUG] === Retrying Episode {Id} ===", episodeId);
+                        var item = _libraryManager.GetItemById(episodeId);
+                        if (item is Episode episode)
+                        {
+                            var retryCount = _episodeRetryCount.GetValueOrDefault(episodeId, 0);
+                            _episodeRetryCount[episodeId] = retryCount + 1;
+                            _episodeRetryQueue[episodeId] = now; // Update last retry time
+
+                            _logger.LogInformation("[MR] [DEBUG] Retry attempt {Attempt}/{MaxAttempts} for episode {Id}", 
+                                retryCount + 1, MaxRetryAttempts, episodeId);
+                            _logger.LogInformation("[MR] [DEBUG] Episode Name: {Name}", episode.Name ?? "NULL");
+                            _logger.LogInformation("[MR] [DEBUG] Episode Path: {Path}", episode.Path ?? "NULL");
+
+                            // Process the episode
+                            HandleEpisodeUpdate(episode, cfg, now, isBulkProcessing: false);
+
+                            _logger.LogInformation("[MR] [DEBUG] === Retry Attempt Complete for Episode {Id} ===", episodeId);
+                        }
+                        else
+                        {
+                            _logger.LogWarning("[MR] [DEBUG] Episode {Id} no longer exists or is not an Episode. Removing from queue.", episodeId);
+                            episodesToRemove.Add(episodeId);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "[MR] [DEBUG] Error retrying episode {Id}: {Message}", episodeId, ex.Message);
+                    }
+                }
+            }
+            else if (episodesToRetry.Count > 0 && _libraryManager == null)
+            {
+                _logger.LogWarning("[MR] [DEBUG] Cannot retry episodes: LibraryManager is not available");
+            }
+
+            _logger.LogInformation("[MR] [DEBUG] === Retry Queue Processing Complete ===");
+            _logger.LogInformation("[MR] [DEBUG] Episodes retried: {Retried}", episodesToRetry.Count);
+            _logger.LogInformation("[MR] [DEBUG] Episodes removed (max attempts): {Removed}", episodesToRemove.Count);
+            _logger.LogInformation("[MR] [DEBUG] Episodes remaining in queue: {Count}", _episodeRetryQueue.Count);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[MR] Error processing retry queue: {Message}", ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Removes an episode from the retry queue (called after successful processing).
+    /// </summary>
+    /// <param name="episodeId">The episode ID to remove.</param>
+    private void RemoveEpisodeFromRetryQueue(Guid episodeId)
+    {
+        if (_episodeRetryQueue.ContainsKey(episodeId))
+        {
+            var retryCount = _episodeRetryCount.GetValueOrDefault(episodeId, 0);
+            var reason = _episodeRetryReason.GetValueOrDefault(episodeId, "Unknown");
+            
+            _episodeRetryQueue.Remove(episodeId);
+            _episodeRetryCount.Remove(episodeId);
+            _episodeRetryReason.Remove(episodeId);
+            
+            _logger.LogInformation("[MR] [DEBUG] === Episode Removed from Retry Queue ===");
+            _logger.LogInformation("[MR] [DEBUG] Episode ID: {Id}", episodeId);
+            _logger.LogInformation("[MR] [DEBUG] Retry count when removed: {Count}", retryCount);
+            _logger.LogInformation("[MR] [DEBUG] Original reason: {Reason}", reason);
+            _logger.LogInformation("[MR] [DEBUG] Episode {Id} successfully processed and removed from retry queue", episodeId);
+            _logger.LogInformation("[MR] [DEBUG] Remaining queue size: {Count}", _episodeRetryQueue.Count);
+        }
+        else
+        {
+            _logger.LogDebug("[MR] [DEBUG] Episode {Id} was not in retry queue (may have been removed already)", episodeId);
+        }
+    }
+
+    /// <summary>
+    /// Extracts a clean episode title from episode.Name by removing filename patterns.
+    /// </summary>
+    /// <param name="episode">The episode to extract the title from.</param>
+    /// <returns>The cleaned episode title, or empty string if no clean title can be extracted.</returns>
+    private string ExtractCleanEpisodeTitle(Episode episode)
+    {
+        if (episode == null || string.IsNullOrWhiteSpace(episode.Name))
+        {
+            _logger.LogDebug("[MR] [DEBUG] ExtractCleanEpisodeTitle: Episode is null or Name is empty");
+            return string.Empty;
+        }
+
+        var episodeName = episode.Name.Trim();
+        var seasonNumber = episode.ParentIndexNumber;
+        var episodeNumber = episode.IndexNumber;
+
+        _logger.LogInformation("[MR] [DEBUG] === Episode Title Extraction ===");
+        _logger.LogInformation("[MR] [DEBUG] Original episode.Name: '{Original}'", episodeName);
+        _logger.LogInformation("[MR] [DEBUG] Season: {Season}, Episode: {Episode}", 
+            seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+            episodeNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+
+        // Use SafeName helper to extract clean title
+        var cleanTitle = SafeName.ExtractCleanEpisodeTitle(episodeName, seasonNumber, episodeNumber);
+
+        if (string.IsNullOrWhiteSpace(cleanTitle))
+        {
+            _logger.LogWarning("[MR] [DEBUG] Could not extract clean episode title from '{EpisodeName}'. Original name may be a filename pattern.", episodeName);
+            _logger.LogInformation("[MR] [DEBUG] === Episode Title Extraction Complete (Empty) ===");
+            return string.Empty;
+        }
+
+        if (cleanTitle != episodeName)
+        {
+            _logger.LogInformation("[MR] [DEBUG] ✓ Successfully extracted clean episode title");
+            _logger.LogInformation("[MR] [DEBUG] Original: '{Original}'", episodeName);
+            _logger.LogInformation("[MR] [DEBUG] Cleaned:  '{Cleaned}'", cleanTitle);
+        }
+        else
+        {
+            _logger.LogInformation("[MR] [DEBUG] Episode title was already clean (no patterns detected)");
+        }
+
+        _logger.LogInformation("[MR] [DEBUG] === Episode Title Extraction Complete ===");
+        return cleanTitle;
     }
 
     /// <summary>
@@ -69,6 +331,8 @@ public class RenameCoordinator
     {
         try
         {
+            // Process retry queue first (before processing new items)
+            ProcessRetryQueue(cfg, DateTime.UtcNow);
             // #region agent log
             try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "C", location = "RenameCoordinator.cs:42", message = "HandleItemUpdated entry", data = new { itemType = e.Item?.GetType().Name ?? "null", itemName = e.Item?.Name ?? "null", enabled = cfg.Enabled, renameSeriesFolders = cfg.RenameSeriesFolders, dryRun = cfg.DryRun, requireProviderIdMatch = cfg.RequireProviderIdMatch, onlyRenameWhenProviderIdsChange = cfg.OnlyRenameWhenProviderIdsChange }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
             // #endregion
@@ -684,37 +948,75 @@ public class RenameCoordinator
             _logger.LogInformation("[MR] cfg.DryRun: {DryRun}", cfg.DryRun);
             _logger.LogInformation("[MR] providerIdsChanged: {ProviderIdsChanged}", providerIdsChanged);
             _logger.LogInformation("[MR] Series ID: {SeriesId}, Series Name: {SeriesName}", series.Id, series.Name);
+            _logger.LogInformation("[MR] Series has provider IDs: {HasProviderIds}", series.ProviderIds?.Count > 0);
 
-            // After successful series rename, process all episodes from all seasons
-            // This ensures ALL seasons are processed, not just Season 1
-            if (renameSuccessful && cfg.RenameEpisodeFiles && !cfg.DryRun && providerIdsChanged)
+            // ALWAYS process all episodes when:
+            // - RenameEpisodeFiles is enabled
+            // - Not in dry-run mode
+            // - Series has provider IDs (identified)
+            // This ensures ALL seasons are processed automatically when a series is identified
+            var shouldProcessEpisodes = cfg.RenameEpisodeFiles && 
+                                       !cfg.DryRun && 
+                                       series.ProviderIds != null && 
+                                       series.ProviderIds.Count > 0;
+
+            _logger.LogInformation("[MR] [DEBUG] === Series Episode Processing Decision ===");
+            _logger.LogInformation("[MR] [DEBUG] shouldProcessEpisodes: {ShouldProcess}", shouldProcessEpisodes);
+            _logger.LogInformation("[MR] [DEBUG]   - RenameEpisodeFiles: {RenameEpisodes}", cfg.RenameEpisodeFiles);
+            _logger.LogInformation("[MR] [DEBUG]   - DryRun: {DryRun}", cfg.DryRun);
+            _logger.LogInformation("[MR] [DEBUG]   - Has Provider IDs: {HasProviderIds} (Count: {Count})", 
+                series.ProviderIds != null && series.ProviderIds.Count > 0, 
+                series.ProviderIds?.Count ?? 0);
+            _logger.LogInformation("[MR] [DEBUG]   - Already processed: {AlreadyProcessed}", 
+                _seriesProcessedForEpisodes.Contains(series.Id));
+
+            if (shouldProcessEpisodes)
             {
-                _logger.LogInformation("[MR] === DECISION: Processing all episodes from all seasons after series identification (provider IDs changed) ===");
-                ProcessAllEpisodesFromSeries(series, cfg, now);
-            }
-            else if (renameSuccessful && cfg.RenameEpisodeFiles && !cfg.DryRun)
-            {
-                _logger.LogInformation("[MR] === DECISION: Provider IDs did not change, but series was renamed. Processing all episodes anyway. ===");
-                _logger.LogInformation("[MR] === Processing all episodes from all seasons (provider IDs unchanged but series renamed) ===");
-                ProcessAllEpisodesFromSeries(series, cfg, now);
-            }
-            else if (cfg.RenameEpisodeFiles && !cfg.DryRun && providerIdsChanged)
-            {
-                _logger.LogInformation("[MR] === DECISION: Series folder not renamed (already correct name), but provider IDs changed. Processing all episodes. ===");
-                _logger.LogInformation("[MR] === Processing all episodes from all seasons (provider IDs changed, no rename needed) ===");
-                ProcessAllEpisodesFromSeries(series, cfg, now);
+                // Check if we've already processed this series recently (avoid duplicate processing)
+                var shouldReprocess = providerIdsChanged || 
+                                     !_seriesProcessedForEpisodes.Contains(series.Id) ||
+                                     (renameSuccessful && !_seriesProcessedForEpisodes.Contains(series.Id));
+
+                _logger.LogInformation("[MR] [DEBUG] shouldReprocess: {ShouldReprocess}", shouldReprocess);
+                _logger.LogInformation("[MR] [DEBUG]   - providerIdsChanged: {Changed}", providerIdsChanged);
+                _logger.LogInformation("[MR] [DEBUG]   - Not in processed set: {NotProcessed}", !_seriesProcessedForEpisodes.Contains(series.Id));
+                _logger.LogInformation("[MR] [DEBUG]   - renameSuccessful: {Renamed}", renameSuccessful);
+
+                if (shouldReprocess)
+                {
+                    _logger.LogInformation("[MR] === DECISION: Processing all episodes from all seasons ===");
+                    if (providerIdsChanged)
+                    {
+                        _logger.LogInformation("[MR] [DEBUG] Reason: Provider IDs changed (series identified)");
+                    }
+                    else if (renameSuccessful)
+                    {
+                        _logger.LogInformation("[MR] [DEBUG] Reason: Series folder renamed");
+                    }
+                    else
+                    {
+                        _logger.LogInformation("[MR] [DEBUG] Reason: Series has provider IDs and episodes need processing");
+                    }
+
+                    ProcessAllEpisodesFromSeries(series, cfg, now);
+                    _seriesProcessedForEpisodes.Add(series.Id);
+                    _logger.LogInformation("[MR] [DEBUG] Series {Id} marked as processed for episodes", series.Id);
+                }
+                else
+                {
+                    _logger.LogInformation("[MR] === DECISION: Skipping episode processing (already processed recently) ===");
+                    _logger.LogInformation("[MR] [DEBUG] Series {Id} was already processed. Skipping to avoid duplicate processing.", series.Id);
+                }
             }
             else
             {
                 _logger.LogInformation("[MR] === DECISION: Not processing all episodes. Reasons:");
-                if (!renameSuccessful)
-                    _logger.LogInformation("[MR]   - Series folder rename was not successful");
                 if (!cfg.RenameEpisodeFiles)
                     _logger.LogInformation("[MR]   - RenameEpisodeFiles is disabled");
                 if (cfg.DryRun)
                     _logger.LogInformation("[MR]   - DryRun mode is enabled");
-                if (!providerIdsChanged)
-                    _logger.LogInformation("[MR]   - Provider IDs did not change");
+                if (series.ProviderIds == null || series.ProviderIds.Count == 0)
+                    _logger.LogInformation("[MR]   - Series has no provider IDs (not identified)");
             }
 
             _logger.LogInformation("[MR] ===== Processing Complete =====");
@@ -919,6 +1221,9 @@ public class RenameCoordinator
             _logger.LogInformation("[MR] Successfully processed: {Processed}", processedCount);
             _logger.LogInformation("[MR] Skipped: {Skipped}", skippedCount);
             _logger.LogInformation("[MR] === All Episodes Processing Complete ===");
+
+            // Process retry queue after processing all episodes
+            ProcessRetryQueue(cfg, now);
         }
         catch (Exception ex)
         {
@@ -1841,7 +2146,8 @@ public class RenameCoordinator
             }
 
             // Get episode metadata - ALL VALUES FROM METADATA, NOT FROM FILENAME
-            var episodeTitle = episode.Name?.Trim() ?? string.Empty;
+            // Extract clean episode title (removing filename patterns)
+            var episodeTitle = ExtractCleanEpisodeTitle(episode);
             
             // Determine season number:
             // - If episode was in series root (flat structure), we created Season 1 folder, so use season 1
@@ -2001,10 +2307,10 @@ public class RenameCoordinator
                 }
                 else
                 {
-                    _logger.LogWarning("[MR] SKIP: Episode missing episode number in metadata AND could not parse from filename. Cannot determine correct episode number. Season={Season}, Episode={Episode}, Filename={FileName}", 
-                        seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
-                        episodeNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
-                        currentFileName);
+                    // Cannot determine episode number - queue for retry
+                    var reason = $"Episode missing episode number in metadata AND could not parse from filename. Cannot determine correct episode number. Filename: {currentFileName}";
+                    _logger.LogWarning("[MR] {Reason} Queueing for retry.", reason);
+                    QueueEpisodeForRetry(episode, reason);
                     return;
                 }
             }
@@ -2051,12 +2357,44 @@ public class RenameCoordinator
                 _logger.LogInformation("[MR] Note: Episode has no season number in metadata (flat structure). Season placeholders in format will be removed.");
             }
 
-            // Episode title is preferred but not required - we can still rename with just episode number
+            // Episode title validation - queue for retry if title is a filename pattern
+            _logger.LogInformation("[MR] [DEBUG] === Episode Title Validation ===");
+            _logger.LogInformation("[MR] [DEBUG] Extracted clean title: '{Title}'", string.IsNullOrWhiteSpace(episodeTitle) ? "(empty)" : episodeTitle);
+            
             if (string.IsNullOrWhiteSpace(episodeTitle))
             {
-                _logger.LogWarning("[MR] Warning: Episode title is missing in metadata. Will use episode number only for renaming. EpisodeId={Id}", episode.Id);
-                episodeTitle = string.Empty; // Use empty string, format will handle it
+                var originalName = episode.Name?.Trim() ?? string.Empty;
+                _logger.LogInformation("[MR] [DEBUG] Clean title is empty. Checking original episode.Name: '{Original}'", originalName);
+                
+                // Check if the original name looks like a filename pattern (contains S##E##)
+                var isFilenamePattern = !string.IsNullOrWhiteSpace(originalName) && 
+                                       System.Text.RegularExpressions.Regex.IsMatch(originalName, @"[Ss]\d+[Ee]\d+", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                
+                _logger.LogInformation("[MR] [DEBUG] Is filename pattern: {IsPattern}", isFilenamePattern);
+                
+                if (isFilenamePattern)
+                {
+                    // Episode title is a filename pattern, metadata may not be loaded yet
+                    var reason = $"Episode title appears to be a filename pattern: '{originalName}'. Metadata may not be loaded yet.";
+                    _logger.LogWarning("[MR] [DEBUG] {Reason} Queueing for retry.", reason);
+                    QueueEpisodeForRetry(episode, reason);
+                    _logger.LogInformation("[MR] [DEBUG] === Episode Title Validation Complete (Queued for Retry) ===");
+                    return; // Skip processing, will retry later
+                }
+                else
+                {
+                    // Title is empty but not a filename pattern - this is acceptable, use episode number only
+                    _logger.LogInformation("[MR] [DEBUG] Episode title is empty but not a filename pattern. Will use episode number only for renaming.");
+                    _logger.LogInformation("[MR] [DEBUG] EpisodeId={Id}", episode.Id);
+                    episodeTitle = string.Empty; // Use empty string, format will handle it
+                }
             }
+            else
+            {
+                _logger.LogInformation("[MR] [DEBUG] Episode title is valid and clean: '{Title}'", episodeTitle);
+            }
+            
+            _logger.LogInformation("[MR] [DEBUG] === Episode Title Validation Complete ===");
 
             // Build desired file name (without extension) using METADATA VALUES ONLY
             var fileExtension = Path.GetExtension(path);
@@ -2079,8 +2417,48 @@ public class RenameCoordinator
                 string.IsNullOrWhiteSpace(episodeTitle) ? "(no title)" : episodeTitle);
             _logger.LogInformation("[MR] Dry Run Mode: {DryRun}", cfg.DryRun);
 
+            // Check if current filename matches desired filename
+            _logger.LogInformation("[MR] [DEBUG] === Filename Comparison ===");
+            _logger.LogInformation("[MR] [DEBUG] Current filename: '{Current}'", currentFileName);
+            _logger.LogInformation("[MR] [DEBUG] Desired filename: '{Desired}'", desiredFileName);
+            
+            var normalizedCurrent = SafeName.NormalizeFileNameForComparison(currentFileName);
+            var normalizedDesired = SafeName.NormalizeFileNameForComparison(desiredFileName);
+            _logger.LogInformation("[MR] [DEBUG] Normalized current: '{NormalizedCurrent}'", normalizedCurrent);
+            _logger.LogInformation("[MR] [DEBUG] Normalized desired: '{NormalizedDesired}'", normalizedDesired);
+            
+            var filenamesMatch = SafeName.DoFilenamesMatch(currentFileName, desiredFileName);
+            _logger.LogInformation("[MR] [DEBUG] Filenames match: {Match}", filenamesMatch);
+            _logger.LogInformation("[MR] [DEBUG] === Filename Comparison Complete ===");
+            
+            if (filenamesMatch)
+            {
+                _logger.LogInformation("[MR] === Filename Already Matches Metadata ===");
+                _logger.LogInformation("[MR] Current filename matches desired format + metadata. Skipping rename.");
+                _logger.LogInformation("[MR] Current: {Current}", currentFileName);
+                _logger.LogInformation("[MR] Desired: {Desired}", desiredFileName);
+                
+                // Remove from retry queue if it was queued
+                RemoveEpisodeFromRetryQueue(episode.Id);
+                
+                _logger.LogInformation("[MR] ===== Episode Processing Complete (No Rename Needed) =====");
+                _logger.LogInformation("[MR] Episode: {Name} (S{Season}E{Episode}) - Already correctly named", 
+                    episode.Name ?? "Unknown",
+                    episode.ParentIndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "??",
+                    episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "??");
+                return;
+            }
+
+            _logger.LogInformation("[MR] === Filename Does Not Match Metadata ===");
+            _logger.LogInformation("[MR] Current filename does not match desired format + metadata. Rename needed.");
+            _logger.LogInformation("[MR] Current: {Current}", currentFileName);
+            _logger.LogInformation("[MR] Desired: {Desired}", desiredFileName);
+
             // Pass the updated path if file was moved to Season 1 folder
             _pathRenamer.TryRenameEpisodeFile(episode, desiredFileName, fileExtension, cfg.DryRun, path);
+            
+            // Remove from retry queue after successful rename attempt
+            RemoveEpisodeFromRetryQueue(episode.Id);
 
             _logger.LogInformation("[MR] ===== Episode Processing Complete =====");
             _logger.LogInformation("[MR] Episode: {Name} (S{Season}E{Episode}) - Processing finished", 

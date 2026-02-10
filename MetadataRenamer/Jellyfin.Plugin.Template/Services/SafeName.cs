@@ -330,6 +330,114 @@ public static class SafeName
         return null;
     }
 
+    /// <summary>
+    /// Extracts a clean episode title from episode.Name by removing filename patterns.
+    /// Removes patterns like "S02E06 - ", repeated patterns, and series name patterns.
+    /// </summary>
+    /// <param name="episodeName">The episode name from Jellyfin metadata (may contain filename patterns).</param>
+    /// <param name="seasonNumber">The season number (optional, used for pattern detection).</param>
+    /// <param name="episodeNumber">The episode number (optional, used for pattern detection).</param>
+    /// <returns>The cleaned episode title, or empty string if no clean title can be extracted.</returns>
+    public static string ExtractCleanEpisodeTitle(string episodeName, int? seasonNumber, int? episodeNumber)
+    {
+        if (string.IsNullOrWhiteSpace(episodeName))
+        {
+            return string.Empty;
+        }
+
+        var title = episodeName.Trim();
+
+        // Remove repeated patterns like "S02E06 - S02E06 - S02E06 - ..."
+        // This pattern can repeat multiple times
+        var repeatedPattern = new Regex(@"^([Ss]\d+[Ee]\d+\s*-\s*)+", RegexOptions.IgnoreCase);
+        title = repeatedPattern.Replace(title, string.Empty);
+
+        // Remove S##E## - pattern from beginning (case-insensitive, flexible spacing)
+        // Pattern: S{season}E{episode} - or S{season}E{episode}-
+        if (seasonNumber.HasValue && episodeNumber.HasValue)
+        {
+            // Try exact match first
+            var exactPattern = new Regex($@"^[Ss]{seasonNumber.Value}[Ee]{episodeNumber.Value}\s*-\s*", RegexOptions.IgnoreCase);
+            title = exactPattern.Replace(title, string.Empty);
+
+            // Also try zero-padded versions
+            var paddedPattern = new Regex($@"^[Ss]{seasonNumber.Value:D2}[Ee]{episodeNumber.Value:D2}\s*-\s*", RegexOptions.IgnoreCase);
+            title = paddedPattern.Replace(title, string.Empty);
+        }
+
+        // Remove generic S##E## - pattern (without specific numbers)
+        var genericPattern = new Regex(@"^[Ss]\d+[Ee]\d+\s*-\s*", RegexOptions.IgnoreCase);
+        title = genericPattern.Replace(title, string.Empty);
+
+        // Remove series name + "Season X Dub Episode Y" patterns
+        // Pattern: "Series Name Season X Dub Episode Y" or similar
+        var seriesSeasonPattern = new Regex(@"\s*Season\s+\d+\s+Dub\s+Episode\s+\d+.*$", RegexOptions.IgnoreCase);
+        title = seriesSeasonPattern.Replace(title, string.Empty);
+
+        // Remove "Episode X" or "Ep X" patterns at the end
+        var episodePattern = new Regex(@"\s*[Ee]pisode\s+\d+.*$", RegexOptions.IgnoreCase);
+        title = episodePattern.Replace(title, string.Empty);
+
+        // Clean up any remaining separators at the beginning
+        title = Regex.Replace(title, @"^[\s\-–—]+", string.Empty);
+
+        // Clean up any remaining separators at the end
+        title = Regex.Replace(title, @"[\s\-–—]+$", string.Empty);
+
+        // Collapse multiple spaces
+        title = CollapseSpaces(title);
+
+        return title;
+    }
+
+    /// <summary>
+    /// Normalizes a filename for comparison by removing extension, normalizing whitespace, and converting to lowercase.
+    /// </summary>
+    /// <param name="fileName">The filename to normalize.</param>
+    /// <returns>The normalized filename.</returns>
+    public static string NormalizeFileNameForComparison(string fileName)
+    {
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
+            return string.Empty;
+        }
+
+        // Remove file extension
+        var withoutExt = Path.GetFileNameWithoutExtension(fileName);
+
+        // Normalize whitespace
+        withoutExt = CollapseSpaces(withoutExt);
+
+        // Convert to lowercase for case-insensitive comparison
+        withoutExt = withoutExt.ToLowerInvariant();
+
+        return withoutExt;
+    }
+
+    /// <summary>
+    /// Compares two filenames to determine if they match, accounting for minor variations.
+    /// </summary>
+    /// <param name="current">The current filename.</param>
+    /// <param name="desired">The desired filename.</param>
+    /// <returns>True if the filenames match (after normalization), false otherwise.</returns>
+    public static bool DoFilenamesMatch(string current, string desired)
+    {
+        if (string.IsNullOrWhiteSpace(current) && string.IsNullOrWhiteSpace(desired))
+        {
+            return true;
+        }
+
+        if (string.IsNullOrWhiteSpace(current) || string.IsNullOrWhiteSpace(desired))
+        {
+            return false;
+        }
+
+        var normalizedCurrent = NormalizeFileNameForComparison(current);
+        var normalizedDesired = NormalizeFileNameForComparison(desired);
+
+        return string.Equals(normalizedCurrent, normalizedDesired, StringComparison.Ordinal);
+    }
+
     private static string CollapseSpaces(string s)
         => Regex.Replace(s ?? string.Empty, @"\s+", " ").Trim();
 }
