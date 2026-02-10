@@ -1532,7 +1532,7 @@ public class RenameCoordinator
                     // #region agent log - PROCESS-ALL-EPISODES: Track when ProcessAllEpisodesFromSeries is called
                     try
                     {
-                        _logger.LogInformation("[MR] [DEBUG] [PROCESS-ALL-EPISODES] ProcessAllEpisodesFromSeries called: SeriesId={SeriesId}, SeriesName='{SeriesName}', ProviderIdsChanged={ProviderIdsChanged}, RenameSuccessful={RenameSuccessful}, HasProviderIds={HasProviderIds}",
+                        _logger.LogWarning("[MR] [DEBUG] [PROCESS-ALL-EPISODES] ProcessAllEpisodesFromSeries called: SeriesId={SeriesId}, SeriesName='{SeriesName}', ProviderIdsChanged={ProviderIdsChanged}, RenameSuccessful={RenameSuccessful}, HasProviderIds={HasProviderIds}",
                             series.Id.ToString(), series.Name ?? "NULL", providerIdsChanged, renameSuccessful,
                             series.ProviderIds != null && series.ProviderIds.Count > 0);
                         
@@ -2097,9 +2097,20 @@ public class RenameCoordinator
                 .OrderBy(g => g.Key)
                 .ToList();
             
-            _logger.LogInformation("[MR] [DEBUG] [ALL-SEASONS-FOUND] === All Seasons Found in Series ===");
-            _logger.LogInformation("[MR] [DEBUG] [ALL-SEASONS-FOUND] Series: {Name}, ID: {Id}", series.Name ?? "NULL", series.Id);
-            _logger.LogInformation("[MR] [DEBUG] [ALL-SEASONS-FOUND] Total seasons detected: {SeasonCount}", episodesBySeasonForLogging.Count);
+            // Check if we have Season 2+ episodes
+            var hasSeason2Plus = episodesBySeasonForLogging.Any(sg => sg.Key >= 2);
+            if (hasSeason2Plus)
+            {
+                _logger.LogWarning("[MR] [DEBUG] [ALL-SEASONS-FOUND] === All Seasons Found in Series (MULTI-SEASON SHOW) ===");
+                _logger.LogWarning("[MR] [DEBUG] [ALL-SEASONS-FOUND] Series: {Name}, ID: {Id}", series.Name ?? "NULL", series.Id);
+                _logger.LogWarning("[MR] [DEBUG] [ALL-SEASONS-FOUND] Total seasons detected: {SeasonCount} (Season 2+ episodes present!)", episodesBySeasonForLogging.Count);
+            }
+            else
+            {
+                _logger.LogInformation("[MR] [DEBUG] [ALL-SEASONS-FOUND] === All Seasons Found in Series ===");
+                _logger.LogInformation("[MR] [DEBUG] [ALL-SEASONS-FOUND] Series: {Name}, ID: {Id}", series.Name ?? "NULL", series.Id);
+                _logger.LogInformation("[MR] [DEBUG] [ALL-SEASONS-FOUND] Total seasons detected: {SeasonCount}", episodesBySeasonForLogging.Count);
+            }
             
             // #region agent log - ALL-SEASONS-FOUND: Track all seasons with episodes
             try
@@ -2133,10 +2144,18 @@ public class RenameCoordinator
             {
                 var seasonNum = seasonGroup.Key;
                 var isSeason2Plus = seasonNum >= 2;
-                _logger.LogInformation("[MR] [DEBUG] [ALL-SEASONS-FOUND] Season {Season}: {Count} episodes found (Season2Plus={IsSeason2Plus})", 
-                    seasonNum.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                    seasonGroup.Count().ToString(System.Globalization.CultureInfo.InvariantCulture),
-                    isSeason2Plus);
+                if (isSeason2Plus)
+                {
+                    _logger.LogWarning("[MR] [DEBUG] [ALL-SEASONS-FOUND] Season {Season}: {Count} episodes found (SEASON 2+ - WILL BE PROCESSED)", 
+                        seasonNum.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                        seasonGroup.Count().ToString(System.Globalization.CultureInfo.InvariantCulture));
+                }
+                else
+                {
+                    _logger.LogInformation("[MR] [DEBUG] [ALL-SEASONS-FOUND] Season {Season}: {Count} episodes found", 
+                        seasonNum.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                        seasonGroup.Count().ToString(System.Globalization.CultureInfo.InvariantCulture));
+                }
                 
                 // #region agent log - MULTI-SEASON-DEBUG: Track Season 2+ detection
                 if (isSeason2Plus)
@@ -2181,12 +2200,12 @@ public class RenameCoordinator
                                       System.Text.RegularExpressions.Regex.IsMatch(ep.Name, @"[Ss]\d+[Ee]\d+", System.Text.RegularExpressions.RegexOptions.IgnoreCase)
                 }).ToList();
                 
-                _logger.LogInformation("[MR] [DEBUG] [EPISODES-FOUND] ProcessAllEpisodesFromSeries found {TotalEpisodes} episodes for SeriesId={SeriesId}, SeriesName='{SeriesName}'",
+                _logger.LogWarning("[MR] [DEBUG] [EPISODES-FOUND] ProcessAllEpisodesFromSeries found {TotalEpisodes} episodes for SeriesId={SeriesId}, SeriesName='{SeriesName}'",
                     allEpisodes.Count, series.Id.ToString(), series.Name ?? "NULL");
                 
                 foreach (var epMeta in episodesMetadata.Take(10)) // Log first 10 episodes to avoid log spam
                 {
-                    _logger.LogInformation("[MR] [DEBUG] [EPISODES-FOUND] Episode: Id={EpisodeId}, Name='{EpisodeName}', S{Season}E{Episode}, IsFilenamePattern={IsFilenamePattern}",
+                    _logger.LogWarning("[MR] [DEBUG] [EPISODES-FOUND] Episode: Id={EpisodeId}, Name='{EpisodeName}', S{Season}E{Episode}, IsFilenamePattern={IsFilenamePattern}",
                         epMeta.episodeId, epMeta.episodeName, epMeta.parentIndexNumber, epMeta.indexNumber, epMeta.isFilenamePattern);
                 }
                 
@@ -2287,7 +2306,7 @@ public class RenameCoordinator
                     // Track which season this episode belongs to
                     if (seasonNumber >= 0)
                     {
-                        _logger.LogInformation("[MR] [DEBUG] [ALL-SEASONS-PROCESSING] Processing episode from Season {Season}: {Name} (S{Season}E{Episode}) (Season2Plus={IsSeason2Plus})", 
+                        _logger.LogWarning("[MR] [DEBUG] [ALL-SEASONS-PROCESSING] Processing episode from Season {Season}: {Name} (S{Season}E{Episode}) (Season2Plus={IsSeason2Plus})", 
                             seasonNumber, episodeName, seasonNum, episodeNum, isSeason2Plus);
                         
                         // #region agent log - MULTI-SEASON-EPISODE-PROCESSING: Track Season 2+ episode processing
@@ -2383,7 +2402,7 @@ public class RenameCoordinator
                                 var potentialEpisodePath = Path.Combine(potentialSeasonPath, episodeFileName);
                                 if (File.Exists(potentialEpisodePath))
                                 {
-                                    _logger.LogInformation("[MR] [DEBUG] [SEASON2+-PATH-FIX] Found Season 2+ episode file using derived path: {Path}", potentialEpisodePath);
+                                    _logger.LogWarning("[MR] [DEBUG] [SEASON2+-PATH-FIX] Found Season 2+ episode file using derived path: {Path}", potentialEpisodePath);
                                     // Update episode path for processing
                                     episode.Path = potentialEpisodePath;
                                     episodePath = potentialEpisodePath;
@@ -2423,7 +2442,7 @@ public class RenameCoordinator
                             var seasonMatch = System.Text.RegularExpressions.Regex.Match(dirName, @"(?:Season\s*|S)(\d+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
                             if (seasonMatch.Success && int.TryParse(seasonMatch.Groups[1].Value, out var extractedSeason))
                             {
-                                _logger.LogInformation("[MR] [DEBUG] [SEASON2+-METADATA-FIX] Derived season number {Season} from folder path for episode {EpisodeId}", extractedSeason, episode.Id);
+                                _logger.LogWarning("[MR] [DEBUG] [SEASON2+-METADATA-FIX] Derived season number {Season} from folder path for episode {EpisodeId}", extractedSeason, episode.Id);
                                 // Use reflection to set ParentIndexNumber if possible, or process with derived value
                                 hasSeasonNumber = true;
                             }
@@ -2504,11 +2523,11 @@ public class RenameCoordinator
                         var isSeason2Plus = seasonNumber >= 2;
                         if (isSeason2Plus)
                         {
-                            _logger.LogInformation("[MR] [DEBUG] [MULTI-SEASON-CALL] About to call HandleEpisodeUpdate for Season 2+ episode: S{Season}E{Episode}: {Name}", 
+                            _logger.LogWarning("[MR] [DEBUG] [MULTI-SEASON-CALL] About to call HandleEpisodeUpdate for Season 2+ episode: S{Season}E{Episode}: {Name}", 
                                 seasonNum, episodeNum, episodeName);
                         }
                         HandleEpisodeUpdate(episode, cfg, now, isBulkProcessing: true);
-                        _logger.LogInformation("[MR] [DEBUG] [PROCESS-ALL-EPISODES] HandleEpisodeUpdate completed for S{Season}E{Episode}: {Name} (Season2Plus={IsSeason2Plus})", 
+                        _logger.LogWarning("[MR] [DEBUG] [PROCESS-ALL-EPISODES] HandleEpisodeUpdate completed for S{Season}E{Episode}: {Name} (Season2Plus={IsSeason2Plus})", 
                             seasonNum, episodeNum, episodeName, isSeason2Plus);
                         processedCount++;
                         

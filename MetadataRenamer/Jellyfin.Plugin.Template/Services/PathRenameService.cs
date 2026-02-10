@@ -370,14 +370,27 @@ public class PathRenameService
         {
             var seasonNumber = episode.ParentIndexNumber;
             var isSeason2Plus = seasonNumber.HasValue && seasonNumber.Value >= 2;
-            _logger.LogInformation("[MR] === TryRenameEpisodeFile Called ===");
-            _logger.LogInformation("[MR] Episode: {Name}, ID: {Id}", episode.Name, episode.Id);
-            _logger.LogInformation("[MR] Season: {Season}, Episode: {Episode} (Season2Plus={IsSeason2Plus})", 
-                seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
-                episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
-                isSeason2Plus);
-            _logger.LogInformation("[MR] Desired File Name: {Desired}", desiredFileName + fileExtension);
-            _logger.LogInformation("[MR] Dry Run: {DryRun}", dryRun);
+            if (isSeason2Plus)
+            {
+                _logger.LogWarning("[MR] === TryRenameEpisodeFile Called (Season 2+) ===");
+                _logger.LogWarning("[MR] Episode: {Name}, ID: {Id}", episode.Name, episode.Id);
+                _logger.LogWarning("[MR] Season: {Season}, Episode: {Episode} (Season2Plus={IsSeason2Plus})", 
+                    seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                    episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                    isSeason2Plus);
+                _logger.LogWarning("[MR] Desired File Name: {Desired}", desiredFileName + fileExtension);
+                _logger.LogWarning("[MR] Dry Run: {DryRun}", dryRun);
+            }
+            else
+            {
+                _logger.LogInformation("[MR] === TryRenameEpisodeFile Called ===");
+                _logger.LogInformation("[MR] Episode: {Name}, ID: {Id}", episode.Name, episode.Id);
+                _logger.LogInformation("[MR] Season: {Season}, Episode: {Episode}", 
+                    seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                    episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+                _logger.LogInformation("[MR] Desired File Name: {Desired}", desiredFileName + fileExtension);
+                _logger.LogInformation("[MR] Dry Run: {DryRun}", dryRun);
+            }
             
             // #region agent log - MULTI-SEASON-RENAME-ENTRY: Track Season 2+ rename entry
             if (isSeason2Plus)
@@ -468,10 +481,18 @@ public class PathRenameService
                 return;
             }
 
-            _logger.LogInformation("[MR] === Attempting Actual Rename ===");
-            _logger.LogInformation("[MR] From: {From}", currentPath);
-            _logger.LogInformation("[MR] To: {To}", newFullPath);
-            _logger.LogInformation("[MR] Season2Plus: {IsSeason2Plus}", isSeason2Plus);
+            if (isSeason2Plus)
+            {
+                _logger.LogWarning("[MR] === Attempting Actual Rename (Season 2+) ===");
+                _logger.LogWarning("[MR] From: {From}", currentPath);
+                _logger.LogWarning("[MR] To: {To}", newFullPath);
+            }
+            else
+            {
+                _logger.LogInformation("[MR] === Attempting Actual Rename ===");
+                _logger.LogInformation("[MR] From: {From}", currentPath);
+                _logger.LogInformation("[MR] To: {To}", newFullPath);
+            }
             
             // #region agent log - MULTI-SEASON-RENAME-ATTEMPT: Track Season 2+ rename attempt
             if (isSeason2Plus)
@@ -506,9 +527,18 @@ public class PathRenameService
             
             File.Move(currentPath, newFullPath);
             
-            _logger.LogInformation("[MR] ✓✓✓ SUCCESS: Episode file renamed successfully!");
-            _logger.LogInformation("[MR] Old: {From}", currentPath);
-            _logger.LogInformation("[MR] New: {To}", newFullPath);
+            if (isSeason2Plus)
+            {
+                _logger.LogWarning("[MR] ✓✓✓ SUCCESS: Season 2+ episode file renamed successfully!");
+                _logger.LogWarning("[MR] Old: {From}", currentPath);
+                _logger.LogWarning("[MR] New: {To}", newFullPath);
+            }
+            else
+            {
+                _logger.LogInformation("[MR] ✓✓✓ SUCCESS: Episode file renamed successfully!");
+                _logger.LogInformation("[MR] Old: {From}", currentPath);
+                _logger.LogInformation("[MR] New: {To}", newFullPath);
+            }
             
             // #region agent log - MULTI-SEASON-RENAME-SUCCESS: Track successful Season 2+ rename
             if (isSeason2Plus)
