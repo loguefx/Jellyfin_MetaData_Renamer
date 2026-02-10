@@ -3656,20 +3656,104 @@ public class RenameCoordinator
                         {
                             _logger.LogInformation("[MR] [DEBUG] [SEASON-PATH-STALE] Library root: {LibraryRoot}", libraryRoot);
                             
-                            // Search for the series folder in the library root (look for folders matching the series name pattern)
-                            // This is a fallback - we'll try to find the renamed series folder
+                            // Search for the series folder in the library root
+                            // Strategy: First try to match by provider ID (most reliable), then fall back to name-based search
                             try
                             {
-                                var seriesName = season.Series?.Name;
-                                if (!string.IsNullOrWhiteSpace(seriesName))
+                                var series = season.Series;
+                                if (series != null)
                                 {
-                                    // Look for folders starting with the series name
-                                    var potentialSeriesFolders = Directory.GetDirectories(libraryRoot, $"{seriesName}*", SearchOption.TopDirectoryOnly);
-                                    if (potentialSeriesFolders.Length > 0)
+                                    // Strategy 1: Try to match by provider ID in folder name (most reliable)
+                                    // Look for folders containing provider ID patterns like [tmdb-12345], [tvdb-12345], etc.
+                                    if (series.ProviderIds != null && series.ProviderIds.Count > 0)
                                     {
-                                        // Use the first match (should be the renamed folder)
-                                        seriesPath = potentialSeriesFolders[0];
-                                        _logger.LogWarning("[MR] [DEBUG] [SEASON-PATH-STALE] Found potential series folder by name search: {FoundPath}", seriesPath);
+                                        var allFolders = Directory.GetDirectories(libraryRoot, "*", SearchOption.TopDirectoryOnly);
+                                        foreach (var providerId in series.ProviderIds)
+                                        {
+                                            var providerLabel = providerId.Key.ToLowerInvariant();
+                                            var providerValue = providerId.Value;
+                                            
+                                            // Search for folders containing [providerLabel-providerValue] pattern
+                                            var searchPattern = $"[{providerLabel}-{providerValue}]";
+                                            var matchingFolders = allFolders.Where(folder => 
+                                                Path.GetFileName(folder).Contains(searchPattern, StringComparison.OrdinalIgnoreCase)).ToList();
+                                            
+                                            if (matchingFolders.Count == 1)
+                                            {
+                                                // Perfect match - exactly one folder with this provider ID
+                                                seriesPath = matchingFolders[0];
+                                                _logger.LogWarning("[MR] [DEBUG] [SEASON-PATH-STALE] Found series folder by provider ID match: {FoundPath} (Provider: {Provider}={Value})", 
+                                                    seriesPath, providerLabel, providerValue);
+                                                break;
+                                            }
+                                            else if (matchingFolders.Count > 1)
+                                            {
+                                                // Multiple matches - try to narrow down by series name
+                                                var seriesName = series.Name;
+                                                if (!string.IsNullOrWhiteSpace(seriesName))
+                                                {
+                                                    var nameMatches = matchingFolders.Where(folder => 
+                                                        Path.GetFileName(folder).StartsWith(seriesName, StringComparison.OrdinalIgnoreCase)).ToList();
+                                                    if (nameMatches.Count == 1)
+                                                    {
+                                                        seriesPath = nameMatches[0];
+                                                        _logger.LogWarning("[MR] [DEBUG] [SEASON-PATH-STALE] Found series folder by provider ID + name match: {FoundPath} (Provider: {Provider}={Value})", 
+                                                            seriesPath, providerLabel, providerValue);
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    
+                                    // Strategy 2: Fall back to name-based search if provider ID search didn't find a unique match
+                                    if (string.IsNullOrWhiteSpace(seriesPath) || !Directory.Exists(seriesPath))
+                                    {
+                                        var seriesName = series.Name;
+                                        if (!string.IsNullOrWhiteSpace(seriesName))
+                                        {
+                                            // Escape special characters in series name for search pattern
+                                            // Note: Directory.GetDirectories uses simple wildcards (* and ?), not regex
+                                            // So we need to escape special characters that might interfere
+                                            var escapedName = seriesName.Replace("[", "[[]").Replace("]", "[]]");
+                                            
+                                            try
+                                            {
+                                                // Try exact name match first (case-insensitive)
+                                                var allFolders = Directory.GetDirectories(libraryRoot, "*", SearchOption.TopDirectoryOnly);
+                                                var exactMatches = allFolders.Where(folder => 
+                                                    string.Equals(Path.GetFileName(folder), seriesName, StringComparison.OrdinalIgnoreCase)).ToList();
+                                                
+                                                if (exactMatches.Count == 1)
+                                                {
+                                                    seriesPath = exactMatches[0];
+                                                    _logger.LogWarning("[MR] [DEBUG] [SEASON-PATH-STALE] Found series folder by exact name match: {FoundPath}", seriesPath);
+                                                }
+                                                else
+                                                {
+                                                    // Fall back to prefix match
+                                                    var prefixMatches = allFolders.Where(folder => 
+                                                        Path.GetFileName(folder).StartsWith(seriesName, StringComparison.OrdinalIgnoreCase)).ToList();
+                                                    
+                                                    if (prefixMatches.Count == 1)
+                                                    {
+                                                        seriesPath = prefixMatches[0];
+                                                        _logger.LogWarning("[MR] [DEBUG] [SEASON-PATH-STALE] Found series folder by name prefix match: {FoundPath}", seriesPath);
+                                                    }
+                                                    else if (prefixMatches.Count > 1)
+                                                    {
+                                                        // Multiple matches - log warning but use first match
+                                                        _logger.LogWarning("[MR] [DEBUG] [SEASON-PATH-STALE] Multiple series folders found with name prefix '{SeriesName}'. Using first match: {FoundPath} (Total matches: {Count})", 
+                                                            seriesName, prefixMatches[0], prefixMatches.Count);
+                                                        seriesPath = prefixMatches[0];
+                                                    }
+                                                }
+                                            }
+                                            catch (Exception nameSearchEx)
+                                            {
+                                                _logger.LogWarning(nameSearchEx, "[MR] [DEBUG] [SEASON-PATH-STALE] Error in name-based search: {Error}", nameSearchEx.Message);
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -3689,10 +3773,18 @@ public class RenameCoordinator
                 }
                 
                 // Verify the series path exists
-                if (!Directory.Exists(seriesPath))
+                if (string.IsNullOrWhiteSpace(seriesPath) || !Directory.Exists(seriesPath))
                 {
-                    _logger.LogWarning("[MR] [DEBUG] [SEASON-SKIP-PATH-NOT-EXISTS] SKIP: Derived series path does not exist. SeriesPath={SeriesPath}, SeasonId={Id}, Name={Name}, SeasonNumber={SeasonNumber}", 
-                        seriesPath, season.Id, season.Name ?? "NULL", season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+                    _logger.LogWarning("[MR] [DEBUG] [SEASON-SKIP-PATH-NOT-EXISTS] SKIP: Derived series path does not exist or is null. SeriesPath={SeriesPath}, SeasonId={Id}, Name={Name}, SeasonNumber={SeasonNumber}", 
+                        seriesPath ?? "NULL", season.Id, season.Name ?? "NULL", season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+                    return;
+                }
+                
+                // Validate that season folder name was extracted successfully
+                if (string.IsNullOrWhiteSpace(staleSeasonFolderName))
+                {
+                    _logger.LogWarning("[MR] [DEBUG] [SEASON-SKIP-PATH-NOT-EXISTS] SKIP: Could not extract season folder name from stale path. StalePath={StalePath}, SeasonId={Id}, Name={Name}, SeasonNumber={SeasonNumber}", 
+                        path, season.Id, season.Name ?? "NULL", season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
                     return;
                 }
                 
@@ -3707,9 +3799,33 @@ public class RenameCoordinator
                 }
                 else
                 {
-                    _logger.LogWarning("[MR] [DEBUG] [SEASON-SKIP-PATH-NOT-EXISTS] SKIP: Season path does not exist on disk (tried both metadata path and derived path). MetadataPath={MetadataPath}, DerivedPath={DerivedPath}, SeasonId={Id}, Name={Name}, SeasonNumber={SeasonNumber}", 
-                        season.Path ?? "NULL", potentialSeasonPath, season.Id, season.Name ?? "NULL", season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
-                    return;
+                    // Final fallback: Try case-insensitive search for season folder within the series path
+                    // This handles cases where the season folder name might have different casing
+                    try
+                    {
+                        var seriesSubdirectories = Directory.GetDirectories(seriesPath, "*", SearchOption.TopDirectoryOnly);
+                        var caseInsensitiveMatch = seriesSubdirectories.FirstOrDefault(dir => 
+                            string.Equals(Path.GetFileName(dir), staleSeasonFolderName, StringComparison.OrdinalIgnoreCase));
+                        
+                        if (caseInsensitiveMatch != null && Directory.Exists(caseInsensitiveMatch))
+                        {
+                            _logger.LogWarning("[MR] [DEBUG] [SEASON-PATH-FIX] Found season folder using case-insensitive match: {Path} (Original: {Original})", 
+                                caseInsensitiveMatch, staleSeasonFolderName);
+                            path = caseInsensitiveMatch;
+                        }
+                        else
+                        {
+                            _logger.LogWarning("[MR] [DEBUG] [SEASON-SKIP-PATH-NOT-EXISTS] SKIP: Season path does not exist on disk (tried metadata path, derived path, and case-insensitive search). MetadataPath={MetadataPath}, DerivedPath={DerivedPath}, SeasonId={Id}, Name={Name}, SeasonNumber={SeasonNumber}", 
+                                season.Path ?? "NULL", potentialSeasonPath, season.Id, season.Name ?? "NULL", season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+                            return;
+                        }
+                    }
+                    catch (Exception fallbackEx)
+                    {
+                        _logger.LogWarning(fallbackEx, "[MR] [DEBUG] [SEASON-SKIP-PATH-NOT-EXISTS] SKIP: Error in case-insensitive fallback search. MetadataPath={MetadataPath}, DerivedPath={DerivedPath}, SeasonId={Id}, Name={Name}, SeasonNumber={SeasonNumber}", 
+                            season.Path ?? "NULL", potentialSeasonPath, season.Id, season.Name ?? "NULL", season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+                        return;
+                    }
                 }
             }
             
