@@ -1750,7 +1750,97 @@ public class RenameCoordinator
                 
                 allEpisodes = allItems.OfType<Episode>().ToList();
                 
-                _logger.LogInformation("[MR] Retrieved {Count} episodes using recursive query", allEpisodes.Count);
+                // Extract seasons from query results and process them explicitly
+                // This ensures season folders are renamed even if Jellyfin doesn't fire ItemUpdated events for them
+                var allSeasons = allItems.OfType<Season>().ToList();
+                
+                _logger.LogInformation("[MR] Retrieved {Count} episodes and {SeasonCount} seasons using recursive query", allEpisodes.Count, allSeasons.Count);
+                
+                // #region agent log - SEASONS-FOUND: Track seasons found by ProcessAllEpisodesFromSeries
+                try
+                {
+                    _logger.LogInformation("[MR] [DEBUG] [SEASONS-FOUND] ProcessAllEpisodesFromSeries found {TotalSeasons} seasons for SeriesId={SeriesId}, SeriesName='{SeriesName}'",
+                        allSeasons.Count, series.Id.ToString(), series.Name ?? "NULL");
+                    
+                    foreach (var season in allSeasons.OrderBy(s => s.IndexNumber ?? int.MaxValue))
+                    {
+                        _logger.LogInformation("[MR] [DEBUG] [SEASONS-FOUND] Season: Id={SeasonId}, Name='{SeasonName}', SeasonNumber={SeasonNumber}, Path={SeasonPath}",
+                            season.Id.ToString(), season.Name ?? "NULL", 
+                            season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                            season.Path ?? "NULL");
+                    }
+                    
+                    var logData = new {
+                        runId = "run1",
+                        hypothesisId = "SEASONS-FOUND",
+                        location = "RenameCoordinator.cs:1751",
+                        message = "Seasons found by ProcessAllEpisodesFromSeries",
+                        data = new {
+                            seriesId = series.Id.ToString(),
+                            seriesName = series.Name ?? "NULL",
+                            totalSeasons = allSeasons.Count,
+                            seasons = allSeasons.Select(s => new {
+                                seasonId = s.Id.ToString(),
+                                seasonName = s.Name ?? "NULL",
+                                seasonNumber = s.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                                seasonPath = s.Path ?? "NULL"
+                            }).ToList()
+                        },
+                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                    };
+                    var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                    try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+                }
+                catch (Exception logEx)
+                {
+                    _logger.LogError(logEx, "[MR] [DEBUG] [SEASONS-FOUND] ERROR logging seasons found: {Error}", logEx.Message);
+                }
+                // #endregion
+                
+                // Process season folders explicitly if RenameSeasonFolders is enabled
+                if (cfg.RenameSeasonFolders && allSeasons.Count > 0)
+                {
+                    _logger.LogInformation("[MR] [DEBUG] [PROCESS-ALL-SEASONS] === Processing All Season Folders ===");
+                    _logger.LogInformation("[MR] [DEBUG] [PROCESS-ALL-SEASONS] Found {Count} seasons to process", allSeasons.Count);
+                    
+                    int seasonsProcessed = 0;
+                    int seasonsSkipped = 0;
+                    
+                    foreach (var season in allSeasons.OrderBy(s => s.IndexNumber ?? int.MaxValue))
+                    {
+                        try
+                        {
+                            var seasonNum = season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL";
+                            _logger.LogInformation("[MR] [DEBUG] [PROCESS-ALL-SEASONS] Processing season folder: Season {SeasonNumber} - {Name} (ID: {Id})",
+                                seasonNum, season.Name ?? "NULL", season.Id);
+                            
+                            // Call HandleSeasonUpdate to process the season folder
+                            HandleSeasonUpdate(season, cfg, now);
+                            
+                            seasonsProcessed++;
+                            _logger.LogInformation("[MR] [DEBUG] [PROCESS-ALL-SEASONS] ✓ Season {SeasonNumber} processed successfully", seasonNum);
+                        }
+                        catch (Exception seasonEx)
+                        {
+                            seasonsSkipped++;
+                            var seasonNum = season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL";
+                            _logger.LogError(seasonEx, "[MR] [DEBUG] [PROCESS-ALL-SEASONS] ERROR processing season {SeasonNumber} (ID: {Id}): {Message}",
+                                seasonNum, season.Id, seasonEx.Message);
+                            _logger.LogError("[MR] [DEBUG] [PROCESS-ALL-SEASONS] Stack Trace: {StackTrace}", seasonEx.StackTrace ?? "N/A");
+                        }
+                    }
+                    
+                    _logger.LogInformation("[MR] [DEBUG] [PROCESS-ALL-SEASONS] === Season Folder Processing Summary ===");
+                    _logger.LogInformation("[MR] [DEBUG] [PROCESS-ALL-SEASONS] Total seasons found: {Total}", allSeasons.Count);
+                    _logger.LogInformation("[MR] [DEBUG] [PROCESS-ALL-SEASONS] Successfully processed: {Processed}", seasonsProcessed);
+                    _logger.LogInformation("[MR] [DEBUG] [PROCESS-ALL-SEASONS] Skipped/Errors: {Skipped}", seasonsSkipped);
+                    _logger.LogInformation("[MR] [DEBUG] [PROCESS-ALL-SEASONS] === Season Folder Processing Complete ===");
+                }
+                else if (allSeasons.Count > 0)
+                {
+                    _logger.LogInformation("[MR] [DEBUG] [PROCESS-ALL-SEASONS] SKIP: RenameSeasonFolders is disabled. Found {Count} seasons but not processing them.",
+                        allSeasons.Count);
+                }
                 
                 // Log episodes by season for debugging
                 if (allEpisodes.Count > 0)
@@ -1770,11 +1860,11 @@ public class RenameCoordinator
                     }
                     
                     // Log episodes without season numbers
-                    var episodesWithoutSeason = allEpisodes.Where(e => !e.ParentIndexNumber.HasValue).ToList();
-                    if (episodesWithoutSeason.Count > 0)
+                    var episodesWithoutSeasonNumbers = allEpisodes.Where(e => !e.ParentIndexNumber.HasValue).ToList();
+                    if (episodesWithoutSeasonNumbers.Count > 0)
                     {
-                        _logger.LogWarning("[MR] Found {Count} episodes without season numbers (ParentIndexNumber is null)", episodesWithoutSeason.Count);
-                        foreach (var ep in episodesWithoutSeason.Take(5)) // Log first 5
+                        _logger.LogWarning("[MR] Found {Count} episodes without season numbers (ParentIndexNumber is null)", episodesWithoutSeasonNumbers.Count);
+                        foreach (var ep in episodesWithoutSeasonNumbers.Take(5)) // Log first 5
                         {
                             _logger.LogWarning("[MR]   - Episode ID: {Id}, Name: {Name}, IndexNumber: {IndexNumber}", 
                                 ep.Id, ep.Name ?? "NULL", ep.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
@@ -2009,12 +2099,12 @@ public class RenameCoordinator
             }
             
             // Log episodes without season numbers
-            var episodesWithoutSeasonNumbers = allEpisodes.Where(e => !e.ParentIndexNumber.HasValue).ToList();
-            if (episodesWithoutSeasonNumbers.Count > 0)
+            var episodesWithoutSeasonNumbers2 = allEpisodes.Where(e => !e.ParentIndexNumber.HasValue).ToList();
+            if (episodesWithoutSeasonNumbers2.Count > 0)
             {
                 _logger.LogWarning("[MR] === Episodes Without Season Numbers ===");
-                _logger.LogWarning("[MR] Found {Count} episodes without ParentIndexNumber", episodesWithoutSeasonNumbers.Count);
-                foreach (var ep in episodesWithoutSeasonNumbers.Take(10))
+                _logger.LogWarning("[MR] Found {Count} episodes without ParentIndexNumber", episodesWithoutSeasonNumbers2.Count);
+                foreach (var ep in episodesWithoutSeasonNumbers2.Take(10))
                 {
                     _logger.LogWarning("[MR]   - Episode ID: {Id}, Name: {Name}, IndexNumber: {IndexNumber}, Path: {Path}",
                         ep.Id, ep.Name ?? "NULL", ep.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", ep.Path ?? "NULL");
