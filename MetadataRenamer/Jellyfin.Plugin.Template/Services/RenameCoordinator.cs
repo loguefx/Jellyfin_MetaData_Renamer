@@ -2393,7 +2393,7 @@ public class RenameCoordinator
                         // For Season 2+ episodes, try to derive path from series path + season folder
                         if (!string.IsNullOrWhiteSpace(series.Path) && seasonNumber >= 2)
                         {
-                            var seasonFolderName = SafeName.RenderSeasonFolder(cfg.SeasonFolderFormat, seasonNumber.Value, null);
+                            var seasonFolderName = SafeName.RenderSeasonFolder(cfg.SeasonFolderFormat, seasonNumber, null);
                             var potentialSeasonPath = Path.Combine(series.Path, seasonFolderName);
                             if (Directory.Exists(potentialSeasonPath))
                             {
@@ -2520,7 +2520,6 @@ public class RenameCoordinator
                     
                     try
                     {
-                        var isSeason2Plus = seasonNumber >= 2;
                         if (isSeason2Plus)
                         {
                             _logger.LogWarning("[MR] [DEBUG] [MULTI-SEASON-CALL] About to call HandleEpisodeUpdate for Season 2+ episode: S{Season}E{Episode}: {Name}", 
@@ -2588,7 +2587,6 @@ public class RenameCoordinator
                     }
                     catch (Exception episodeEx)
                     {
-                        var isSeason2Plus = seasonNumber >= 2;
                         // #region agent log - EPISODE-PROCESSING-ERROR: Track episode processing errors
                         try
                         {
@@ -2600,7 +2598,7 @@ public class RenameCoordinator
                             {
                                 try
                                 {
-                                    var logData = new {
+                                    var errorLogData = new {
                                         runId = "run1",
                                         hypothesisId = "MULTI-SEASON-EPISODE-ERROR",
                                         location = "RenameCoordinator.cs:2403",
@@ -2618,8 +2616,8 @@ public class RenameCoordinator
                                         },
                                         timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
                                     };
-                                    var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                                    try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+                                    var errorLogJson = System.Text.Json.JsonSerializer.Serialize(errorLogData) + "\n";
+                                    try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", errorLogJson); } catch { }
                                 }
                                 catch (Exception logEx)
                                 {
