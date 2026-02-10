@@ -554,12 +554,16 @@ public class RenameCoordinator
                 }
                 // #endregion
                 
+                var seasonNumForLogging = episode.ParentIndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL";
+                var episodeNumForLogging = episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL";
+                
                 if (!cfg.RenameEpisodeFiles)
                 {
                     // #region agent log - MULTI-EPISODE-HYP-B: Track episodes skipped due to config
-                    try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "MULTI-EP-B", location = "RenameCoordinator.cs:148", message = "Episode skipped - RenameEpisodeFiles disabled", data = new { episodeId = episode.Id.ToString(), episodeName = episode.Name ?? "NULL" }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+                    try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "MULTI-EP-B", location = "RenameCoordinator.cs:148", message = "Episode skipped - RenameEpisodeFiles disabled", data = new { episodeId = episode.Id.ToString(), episodeName = episode.Name ?? "NULL", seasonNumber = seasonNumForLogging, episodeNumber = episodeNumForLogging }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
                     // #endregion
-                    _logger.LogInformation("[MR] SKIP: RenameEpisodeFiles is disabled in configuration");
+                    _logger.LogInformation("[MR] [DEBUG] [EPISODE-SKIP-CONFIG-DISABLED] SKIP: RenameEpisodeFiles is disabled in configuration. Season={Season}, Episode={Episode}", seasonNumForLogging, episodeNumForLogging);
+                    _logger.LogInformation("[MR] ===== Episode Processing Complete (Skipped - Config Disabled) =====");
                     return;
                 }
                 HandleEpisodeUpdate(episode, cfg, now);
@@ -2792,11 +2796,12 @@ public class RenameCoordinator
                 if (timeSinceLastTry < cfg.PerItemCooldownSeconds)
                 {
                     // #region agent log - MULTI-EPISODE-HYP-C: Track episodes skipped due to cooldown
-                    try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "MULTI-EP-C", location = "RenameCoordinator.cs:525", message = "Episode skipped - cooldown active", data = new { episodeId = episode.Id.ToString(), episodeName = episode.Name ?? "NULL", timeSinceLastTry = timeSinceLastTry.ToString(System.Globalization.CultureInfo.InvariantCulture), cooldownSeconds = cfg.PerItemCooldownSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture) }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+                    try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "MULTI-EP-C", location = "RenameCoordinator.cs:525", message = "Episode skipped - cooldown active", data = new { episodeId = episode.Id.ToString(), episodeName = episode.Name ?? "NULL", seasonNumber = seasonNum, episodeNumber = episodeNum, timeSinceLastTry = timeSinceLastTry.ToString(System.Globalization.CultureInfo.InvariantCulture), cooldownSeconds = cfg.PerItemCooldownSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture) }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
                     // #endregion
                     _logger.LogInformation(
-                        "[MR] SKIP: Cooldown active. EpisodeId={Id}, Name={Name}, Time since last try: {Seconds} seconds (cooldown: {CooldownSeconds})",
-                        episode.Id, episode.Name, timeSinceLastTry.ToString(System.Globalization.CultureInfo.InvariantCulture), cfg.PerItemCooldownSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                        "[MR] [DEBUG] [EPISODE-SKIP-COOLDOWN] SKIP: Cooldown active. EpisodeId={Id}, Name={Name}, Season={Season}, Episode={Episode}, Time since last try: {Seconds} seconds (cooldown: {CooldownSeconds})",
+                        episode.Id, episode.Name, seasonNum, episodeNum, timeSinceLastTry.ToString(System.Globalization.CultureInfo.InvariantCulture), cfg.PerItemCooldownSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                    _logger.LogInformation("[MR] ===== Episode Processing Complete (Skipped - Cooldown) =====");
                     return;
                 }
             }
@@ -2807,20 +2812,22 @@ public class RenameCoordinator
             if (string.IsNullOrWhiteSpace(path))
             {
                 // #region agent log - MULTI-EPISODE-HYP-D: Track episodes skipped due to no path
-                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "MULTI-EP-D", location = "RenameCoordinator.cs:539", message = "Episode skipped - no path", data = new { episodeId = episode.Id.ToString(), episodeName = episode.Name ?? "NULL" }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "MULTI-EP-D", location = "RenameCoordinator.cs:539", message = "Episode skipped - no path", data = new { episodeId = episode.Id.ToString(), episodeName = episode.Name ?? "NULL", seasonNumber = seasonNum, episodeNumber = episodeNum }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
                 // #endregion
-                _logger.LogWarning("[MR] SKIP: Episode has no path. EpisodeId={Id}, Name={Name}", episode.Id, episode.Name);
+                _logger.LogWarning("[MR] [DEBUG] [EPISODE-SKIP-NO-PATH] SKIP: Episode has no path. EpisodeId={Id}, Name={Name}, Season={Season}, Episode={Episode}", episode.Id, episode.Name, seasonNum, episodeNum);
+                _logger.LogInformation("[MR] ===== Episode Processing Complete (Skipped - No Path) =====");
                 return;
             }
 
             if (!File.Exists(path))
             {
                 // #region agent log - MULTI-EPISODE-HYP-E: Track episodes skipped due to file not existing
-                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "MULTI-EP-E", location = "RenameCoordinator.cs:546", message = "Episode skipped - file does not exist", data = new { episodeId = episode.Id.ToString(), episodeName = episode.Name ?? "NULL", path = path }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "MULTI-EP-E", location = "RenameCoordinator.cs:546", message = "Episode skipped - file does not exist", data = new { episodeId = episode.Id.ToString(), episodeName = episode.Name ?? "NULL", seasonNumber = seasonNum, episodeNumber = episodeNum, path = path }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
                 // #endregion
-                _logger.LogWarning("[MR] SKIP: Episode file does not exist on disk. Path={Path}, EpisodeId={Id}, Name={Name}", path, episode.Id, episode.Name);
-            return;
-        }
+                _logger.LogWarning("[MR] [DEBUG] [EPISODE-SKIP-FILE-NOT-EXISTS] SKIP: Episode file does not exist on disk. Path={Path}, EpisodeId={Id}, Name={Name}, Season={Season}, Episode={Episode}", path, episode.Id, episode.Name, seasonNum, episodeNum);
+                _logger.LogInformation("[MR] ===== Episode Processing Complete (Skipped - File Not Exists) =====");
+                return;
+            }
 
             _logger.LogInformation("[MR] Episode file path verified: {Path}", path);
 
@@ -3092,8 +3099,9 @@ public class RenameCoordinator
                 {
                     // Cannot determine episode number - queue for retry
                     var reason = $"Episode missing episode number in metadata AND could not parse from filename. Cannot determine correct episode number. Filename: {currentFileName}";
-                    _logger.LogWarning("[MR] {Reason} Queueing for retry.", reason);
+                    _logger.LogWarning("[MR] [DEBUG] [EPISODE-SKIP-NO-EP-NUMBER] {Reason} Queueing for retry. Season={Season}, Episode={Episode}", reason, seasonNum, episodeNum);
                     QueueEpisodeForRetry(episode, reason);
+                    _logger.LogInformation("[MR] ===== Episode Processing Complete (Skipped - No Episode Number) =====");
                     return;
                 }
             }
@@ -3113,11 +3121,13 @@ public class RenameCoordinator
             {
                 if (filenameEpisodeNumber.Value != episodeNumber.Value)
                 {
-                    _logger.LogWarning("[MR] SKIP: Episode number mismatch! Filename says episode {FilenameEp}, but metadata says episode {MetadataEp}. " +
+                    _logger.LogWarning("[MR] [DEBUG] [EPISODE-SKIP-EP-NUMBER-MISMATCH] SKIP: Episode number mismatch! Filename says episode {FilenameEp}, but metadata says episode {MetadataEp}. " +
                         "This prevents incorrect renames (e.g., renaming 'episode 1' to 'episode 5'). " +
-                        "Please verify the file is correctly identified in Jellyfin.",
+                        "Please verify the file is correctly identified in Jellyfin. Season={Season}, Episode={Episode}",
                         filenameEpisodeNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                        episodeNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                        episodeNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                        seasonNum, episodeNum);
+                    _logger.LogInformation("[MR] ===== Episode Processing Complete (Skipped - Episode Number Mismatch) =====");
                     return;
                 }
                 else
@@ -3159,9 +3169,10 @@ public class RenameCoordinator
                 {
                     // Episode title is a filename pattern, metadata may not be loaded yet
                     var reason = $"Episode title appears to be a filename pattern: '{originalName}'. Metadata may not be loaded yet.";
-                    _logger.LogWarning("[MR] [DEBUG] {Reason} Queueing for retry.", reason);
+                    _logger.LogWarning("[MR] [DEBUG] [EPISODE-SKIP-FILENAME-PATTERN] {Reason} Queueing for retry. Season={Season}, Episode={Episode}", reason, seasonNum, episodeNum);
                     QueueEpisodeForRetry(episode, reason);
                     _logger.LogInformation("[MR] [DEBUG] === Episode Title Validation Complete (Queued for Retry) ===");
+                    _logger.LogInformation("[MR] ===== Episode Processing Complete (Skipped - Filename Pattern) =====");
                     return; // Skip processing, will retry later
                 }
                 else
