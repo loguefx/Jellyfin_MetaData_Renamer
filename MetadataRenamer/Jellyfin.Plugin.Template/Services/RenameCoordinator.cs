@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using Jellyfin.Plugin.MetadataRenamer.Configuration;
 using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Entities.Movies;
@@ -37,6 +38,13 @@ public class RenameCoordinator
 
     // global debounce
     private DateTime _lastGlobalActionUtc = DateTime.MinValue;
+
+    // Track series updates for detecting "Replace all metadata" (bulk refresh)
+    private readonly Queue<DateTime> _seriesUpdateTimestamps = new(); // Timestamps of recent series updates
+    private DateTime _lastBulkProcessingUtc = DateTime.MinValue;
+    private const int BulkUpdateThreshold = 5; // Number of series updates in time window to trigger bulk processing
+    private const int BulkUpdateTimeWindowSeconds = 10; // Time window for detecting bulk updates
+    private const int BulkProcessingCooldownMinutes = 5; // Cooldown between bulk processing runs
 
     /// <summary>
     /// Initializes a new instance of the <see cref="RenameCoordinator"/> class.
@@ -300,6 +308,43 @@ public class RenameCoordinator
         // Use SafeName helper to extract clean title
         var cleanTitle = SafeName.ExtractCleanEpisodeTitle(episodeName, seasonNumber, episodeNumber);
 
+        // #region agent log - EPISODE-TITLE-EXTRACTION: Track title extraction details
+        try
+        {
+            var isFilenamePattern = !string.IsNullOrWhiteSpace(episodeName) && 
+                                  System.Text.RegularExpressions.Regex.IsMatch(episodeName, @"[Ss]\d+[Ee]\d+", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            _logger.LogInformation("[MR] [DEBUG] [EPISODE-TITLE-EXTRACTION] EpisodeId={EpisodeId}, OriginalName='{OriginalName}', Season={Season}, Episode={Episode}, CleanTitle='{CleanTitle}', IsEmpty={IsEmpty}, IsFilenamePattern={IsFilenamePattern}",
+                episode.Id.ToString(), episodeName, 
+                seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                episodeNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                cleanTitle ?? "NULL", string.IsNullOrWhiteSpace(cleanTitle), isFilenamePattern);
+            
+            var logData = new { 
+                runId = "run1", 
+                hypothesisId = "EPISODE-TITLE-EXTRACTION", 
+                location = "RenameCoordinator.cs:301", 
+                message = "Episode title extraction result", 
+                data = new { 
+                    episodeId = episode.Id.ToString(),
+                    originalName = episodeName,
+                    seasonNumber = seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                    episodeNumber = episodeNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                    cleanTitle = cleanTitle ?? "NULL",
+                    isEmpty = string.IsNullOrWhiteSpace(cleanTitle),
+                    isFilenamePattern = isFilenamePattern
+                }, 
+                timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() 
+            };
+            var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+            try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[MR] [DEBUG] [EPISODE-TITLE-EXTRACTION] ERROR logging title extraction: {Error}", ex.Message);
+            try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { runId = "run1", hypothesisId = "EPISODE-TITLE-EXTRACTION", location = "RenameCoordinator.cs:301", message = "ERROR logging title extraction", data = new { error = ex.Message }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+        }
+        // #endregion
+
         if (string.IsNullOrWhiteSpace(cleanTitle))
         {
             _logger.LogWarning("[MR] [DEBUG] Could not extract clean episode title from '{EpisodeName}'. Original name may be a filename pattern.", episodeName);
@@ -404,6 +449,45 @@ public class RenameCoordinator
             // Handle Episode items
             if (e.Item is Episode episode)
             {
+                // #region agent log - EPISODE-METADATA-DEBUG: Track episode metadata state when ItemUpdated fires
+                try
+                {
+                    var currentFileName = !string.IsNullOrWhiteSpace(episode.Path) ? Path.GetFileNameWithoutExtension(episode.Path) : "NULL";
+                    var isFilenamePattern = !string.IsNullOrWhiteSpace(episode.Name) && 
+                                           System.Text.RegularExpressions.Regex.IsMatch(episode.Name, @"[Ss]\d+[Ee]\d+", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                    var logData = new { 
+                        runId = "run1", 
+                        hypothesisId = "EPISODE-METADATA", 
+                        location = "RenameCoordinator.cs:405", 
+                        message = "Episode ItemUpdated event - full metadata state", 
+                        data = new { 
+                            episodeId = episode.Id.ToString(), 
+                            episodeName = episode.Name ?? "NULL", 
+                            episodeNameIsFilenamePattern = isFilenamePattern,
+                            episodePath = episode.Path ?? "NULL",
+                            currentFileName = currentFileName,
+                            episodeIndexNumber = episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", 
+                            parentIndexNumber = episode.ParentIndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                            seriesName = episode.Series?.Name ?? "NULL",
+                            seriesId = episode.Series?.Id.ToString() ?? "NULL",
+                            seriesPath = episode.Series?.Path ?? "NULL",
+                            seriesHasProviderIds = episode.Series?.ProviderIds != null && episode.Series.ProviderIds.Count > 0
+                        }, 
+                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() 
+                    };
+                    var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                    try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+                    _logger.LogInformation("[MR] [EPISODE-METADATA] Episode ItemUpdated: Id={Id}, Name='{Name}' (isPattern={IsPattern}), Path={Path}, S{Season}E{Episode}", 
+                        episode.Id, episode.Name ?? "NULL", isFilenamePattern, episode.Path ?? "NULL",
+                        episode.ParentIndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "??",
+                        episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "??");
+                }
+                catch (Exception ex)
+                {
+                    try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { runId = "run1", hypothesisId = "EPISODE-METADATA", location = "RenameCoordinator.cs:405", message = "ERROR logging episode metadata", data = new { error = ex.Message }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+                }
+                // #endregion
+                
                 // #region agent log - MULTI-EPISODE-HYP-A: Track all episode ItemUpdated events
                 try
                 {
@@ -492,7 +576,11 @@ public class RenameCoordinator
     /// <summary>
     /// Handles series folder renaming.
     /// </summary>
-    private void HandleSeriesUpdate(Series series, PluginConfiguration cfg, DateTime now)
+    /// <param name="series">The series to process.</param>
+    /// <param name="cfg">The plugin configuration.</param>
+    /// <param name="now">The current UTC time.</param>
+    /// <param name="forceProcessing">If true, processes the series even if provider IDs haven't changed (for bulk refresh).</param>
+    private void HandleSeriesUpdate(Series series, PluginConfiguration cfg, DateTime now, bool forceProcessing = false)
     {
         _logger.LogInformation("[MR] Processing Series: Name={Name}, Id={Id}, Path={Path}", series.Name, series.Id, series.Path);
 
@@ -601,11 +689,40 @@ public class RenameCoordinator
             
             // Year is now optional - we'll handle it in the format rendering
 
+            // Track series update for bulk processing detection
+            var currentTime = DateTime.UtcNow;
+            _seriesUpdateTimestamps.Enqueue(currentTime);
+            
+            // Clean old timestamps outside the time window
+            while (_seriesUpdateTimestamps.Count > 0 && (currentTime - _seriesUpdateTimestamps.Peek()).TotalSeconds > BulkUpdateTimeWindowSeconds)
+            {
+                _seriesUpdateTimestamps.Dequeue();
+            }
+            
+            // Check if this looks like "Replace all metadata" (bulk refresh)
+            var isBulkRefresh = _seriesUpdateTimestamps.Count >= BulkUpdateThreshold;
+            var timeSinceLastBulkProcessing = (currentTime - _lastBulkProcessingUtc).TotalMinutes;
+            var shouldTriggerBulkProcessing = isBulkRefresh && timeSinceLastBulkProcessing >= BulkProcessingCooldownMinutes;
+            
+            if (shouldTriggerBulkProcessing)
+            {
+                _logger.LogInformation("[MR] === Bulk Refresh Detected (Replace All Metadata) ===");
+                _logger.LogInformation("[MR] Detected {Count} series updates in {Seconds} seconds", 
+                    _seriesUpdateTimestamps.Count, BulkUpdateTimeWindowSeconds);
+                _logger.LogInformation("[MR] Triggering bulk processing of all series in library...");
+                
+                _lastBulkProcessingUtc = currentTime;
+                _seriesUpdateTimestamps.Clear(); // Clear after triggering to avoid duplicate triggers
+                
+                // Process all series in the library asynchronously (don't block current processing)
+                Task.Run(() => ProcessAllSeriesInLibrary(cfg, currentTime));
+            }
+
             // Check if we should process during library scans
-            // Logic:
-            // - If ProcessDuringLibraryScans is false: Only process when provider IDs change (Identify flow)
-            // - If ProcessDuringLibraryScans is true: Process during library scans regardless of provider ID changes
-            // - The "Identify" flow (provider IDs change) always works regardless of ProcessDuringLibraryScans
+            // NEW LOGIC:
+            // - Normal scans: Only process when provider IDs change (Identify flow)
+            // - "Replace all metadata": Triggered via bulk processing (handled above)
+            // - The "Identify" flow (provider IDs change) always works
             var hasProviderIds = series.ProviderIds != null && series.ProviderIds.Count > 0;
             var newHash = hasProviderIds && series.ProviderIds != null
                 ? ProviderIdHelper.ComputeProviderHash(series.ProviderIds)
@@ -635,23 +752,26 @@ public class RenameCoordinator
             if (cfg.OnlyRenameWhenProviderIdsChange)
             {
                 // OnlyRenameWhenProviderIdsChange is enabled
-                if (providerIdsChanged || isFirstTime)
+                // NEW BEHAVIOR: Normal scans only process when provider IDs change (Identify flow)
+                // "Replace all metadata" is handled via bulk processing (triggered above)
+                if (forceProcessing)
+                {
+                    // Force processing for bulk refresh (Replace all metadata)
+                    shouldProceed = true;
+                    proceedReason = "Bulk refresh - processing all series regardless of provider ID changes";
+                }
+                else if (providerIdsChanged || isFirstTime)
                 {
                     // Provider IDs changed or first time - always proceed (Identify flow)
                     shouldProceed = true;
                     proceedReason = providerIdsChanged ? "Provider IDs changed (Identify flow)" : "First time processing";
                 }
-                else if (cfg.ProcessDuringLibraryScans)
-                {
-                    // Provider IDs unchanged, but ProcessDuringLibraryScans is enabled - proceed during library scan
-                    shouldProceed = true;
-                    proceedReason = "ProcessDuringLibraryScans enabled (library scan)";
-                }
                 else
                 {
-                    // Provider IDs unchanged and ProcessDuringLibraryScans is disabled - skip
+                    // Provider IDs unchanged - skip (normal scans only process identified shows)
+                    // Bulk refresh is handled separately via ProcessAllSeriesInLibrary
                     shouldProceed = false;
-                    proceedReason = "Provider IDs unchanged and ProcessDuringLibraryScans disabled";
+                    proceedReason = "Provider IDs unchanged - normal scans only process identified shows. Use 'Replace all metadata' for bulk processing.";
                 }
             }
             else
@@ -998,6 +1118,37 @@ public class RenameCoordinator
                         _logger.LogInformation("[MR] [DEBUG] Reason: Series has provider IDs and episodes need processing");
                     }
 
+                    // #region agent log - PROCESS-ALL-EPISODES: Track when ProcessAllEpisodesFromSeries is called
+                    try
+                    {
+                        _logger.LogInformation("[MR] [DEBUG] [PROCESS-ALL-EPISODES] ProcessAllEpisodesFromSeries called: SeriesId={SeriesId}, SeriesName='{SeriesName}', ProviderIdsChanged={ProviderIdsChanged}, RenameSuccessful={RenameSuccessful}, HasProviderIds={HasProviderIds}",
+                            series.Id.ToString(), series.Name ?? "NULL", providerIdsChanged, renameSuccessful,
+                            series.ProviderIds != null && series.ProviderIds.Count > 0);
+                        
+                        var logData = new { 
+                            runId = "run1", 
+                            hypothesisId = "PROCESS-ALL-EPISODES", 
+                            location = "RenameCoordinator.cs:1001", 
+                            message = "ProcessAllEpisodesFromSeries called", 
+                            data = new { 
+                                seriesId = series.Id.ToString(),
+                                seriesName = series.Name ?? "NULL",
+                                providerIdsChanged = providerIdsChanged,
+                                renameSuccessful = renameSuccessful,
+                                hasProviderIds = series.ProviderIds != null && series.ProviderIds.Count > 0
+                            }, 
+                            timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() 
+                        };
+                        var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                        try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "[MR] [DEBUG] [PROCESS-ALL-EPISODES] ERROR logging ProcessAllEpisodesFromSeries call: {Error}", ex.Message);
+                        try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { runId = "run1", hypothesisId = "PROCESS-ALL-EPISODES", location = "RenameCoordinator.cs:1001", message = "ERROR logging ProcessAllEpisodesFromSeries call", data = new { error = ex.Message }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+                    }
+                    // #endregion
+                    
                     ProcessAllEpisodesFromSeries(series, cfg, now);
                     _seriesProcessedForEpisodes.Add(series.Id);
                     _logger.LogInformation("[MR] [DEBUG] Series {Id} marked as processed for episodes", series.Id);
@@ -1134,6 +1285,57 @@ public class RenameCoordinator
 
             _logger.LogInformation("[MR] Found {Count} total episodes in series", allEpisodes.Count);
 
+            // #region agent log - EPISODES-FOUND: Track episodes found by ProcessAllEpisodesFromSeries
+            try
+            {
+                var episodesMetadata = allEpisodes.Select(ep => new {
+                    episodeId = ep.Id.ToString(),
+                    episodeName = ep.Name ?? "NULL",
+                    episodePath = ep.Path ?? "NULL",
+                    indexNumber = ep.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                    parentIndexNumber = ep.ParentIndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                    isFilenamePattern = !string.IsNullOrWhiteSpace(ep.Name) && 
+                                      System.Text.RegularExpressions.Regex.IsMatch(ep.Name, @"[Ss]\d+[Ee]\d+", System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+                }).ToList();
+                
+                _logger.LogInformation("[MR] [DEBUG] [EPISODES-FOUND] ProcessAllEpisodesFromSeries found {TotalEpisodes} episodes for SeriesId={SeriesId}, SeriesName='{SeriesName}'",
+                    allEpisodes.Count, series.Id.ToString(), series.Name ?? "NULL");
+                
+                foreach (var epMeta in episodesMetadata.Take(10)) // Log first 10 episodes to avoid log spam
+                {
+                    _logger.LogInformation("[MR] [DEBUG] [EPISODES-FOUND] Episode: Id={EpisodeId}, Name='{EpisodeName}', S{Season}E{Episode}, IsFilenamePattern={IsFilenamePattern}",
+                        epMeta.episodeId, epMeta.episodeName, epMeta.parentIndexNumber, epMeta.indexNumber, epMeta.isFilenamePattern);
+                }
+                
+                if (episodesMetadata.Count > 10)
+                {
+                    _logger.LogInformation("[MR] [DEBUG] [EPISODES-FOUND] ... and {RemainingCount} more episodes (total: {Total})",
+                        episodesMetadata.Count - 10, episodesMetadata.Count);
+                }
+                
+                var logData = new { 
+                    runId = "run1", 
+                    hypothesisId = "EPISODES-FOUND", 
+                    location = "RenameCoordinator.cs:1135", 
+                    message = "Episodes found by ProcessAllEpisodesFromSeries", 
+                    data = new { 
+                        seriesId = series.Id.ToString(),
+                        seriesName = series.Name ?? "NULL",
+                        totalEpisodes = allEpisodes.Count,
+                        episodes = episodesMetadata
+                    }, 
+                    timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() 
+                };
+                var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[MR] [DEBUG] [EPISODES-FOUND] ERROR logging episodes found: {Error}", ex.Message);
+                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { runId = "run1", hypothesisId = "EPISODES-FOUND", location = "RenameCoordinator.cs:1135", message = "ERROR logging episodes found", data = new { error = ex.Message }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+            }
+            // #endregion
+
             if (allEpisodes.Count == 0)
             {
                 _logger.LogInformation("[MR] No episodes found in series. Episodes may not be scanned yet.");
@@ -1228,6 +1430,93 @@ public class RenameCoordinator
         catch (Exception ex)
         {
             _logger.LogError(ex, "[MR] ERROR in ProcessAllEpisodesFromSeries: {Message}", ex.Message);
+            _logger.LogError("[MR] Stack Trace: {StackTrace}", ex.StackTrace ?? "N/A");
+        }
+    }
+
+    /// <summary>
+    /// Processes all series in the library for bulk refresh (Replace all metadata).
+    /// </summary>
+    private void ProcessAllSeriesInLibrary(PluginConfiguration cfg, DateTime now)
+    {
+        try
+        {
+            if (_libraryManager == null)
+            {
+                _logger.LogWarning("[MR] LibraryManager is not available. Cannot process all series in library.");
+                return;
+            }
+
+            _logger.LogInformation("[MR] === Processing All Series in Library (Bulk Refresh) ===");
+            _logger.LogInformation("[MR] This is triggered when 'Replace all metadata' is detected.");
+
+            // Get all series from the library
+            var query = new InternalItemsQuery
+            {
+                IncludeItemTypes = new[] { Jellyfin.Data.Enums.BaseItemKind.Series },
+                Recursive = true
+            };
+
+            var allSeries = _libraryManager.GetItemList(query).OfType<Series>().ToList();
+
+            _logger.LogInformation("[MR] Found {Count} series in library", allSeries.Count);
+
+            if (allSeries.Count == 0)
+            {
+                _logger.LogInformation("[MR] No series found in library.");
+                return;
+            }
+
+            int processedCount = 0;
+            int skippedCount = 0;
+
+            foreach (var series in allSeries)
+            {
+                try
+                {
+                    _logger.LogInformation("[MR] === Processing Series: {Name} (ID: {Id}) ===", series.Name ?? "Unknown", series.Id);
+
+                    // Check if series has required metadata
+                    if (string.IsNullOrWhiteSpace(series.Path) || !Directory.Exists(series.Path))
+                    {
+                        _logger.LogWarning("[MR] SKIP (Bulk): Series path does not exist. Path={Path}, SeriesId={Id}, Name={Name}",
+                            series.Path ?? "NULL", series.Id, series.Name ?? "Unknown");
+                        skippedCount++;
+                        continue;
+                    }
+
+                    if (cfg.RequireProviderIdMatch && (series.ProviderIds == null || series.ProviderIds.Count == 0))
+                    {
+                        _logger.LogInformation("[MR] SKIP (Bulk): Series has no provider IDs. SeriesId={Id}, Name={Name}",
+                            series.Id, series.Name ?? "Unknown");
+                        skippedCount++;
+                        continue;
+                    }
+
+                    // Process the series (this will rename folder and episodes if needed)
+                    // Force processing for bulk refresh - process even if provider IDs haven't changed
+                    HandleSeriesUpdate(series, cfg, now, forceProcessing: true);
+                    processedCount++;
+
+                    _logger.LogInformation("[MR] ✓ Successfully processed series: {Name}", series.Name ?? "Unknown");
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[MR] ERROR processing series {SeriesName} (ID: {SeriesId}) during bulk refresh: {Message}",
+                        series.Name ?? "Unknown", series.Id, ex.Message);
+                    skippedCount++;
+                }
+            }
+
+            _logger.LogInformation("[MR] === Bulk Processing Complete ===");
+            _logger.LogInformation("[MR] Total series found: {Total}", allSeries.Count);
+            _logger.LogInformation("[MR] Successfully processed: {Processed}", processedCount);
+            _logger.LogInformation("[MR] Skipped: {Skipped}", skippedCount);
+            _logger.LogInformation("[MR] === Bulk Refresh Complete ===");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[MR] ERROR in ProcessAllSeriesInLibrary: {Message}", ex.Message);
             _logger.LogError("[MR] Stack Trace: {StackTrace}", ex.StackTrace ?? "N/A");
         }
     }
@@ -2430,6 +2719,44 @@ public class RenameCoordinator
             var filenamesMatch = SafeName.DoFilenamesMatch(currentFileName, desiredFileName);
             _logger.LogInformation("[MR] [DEBUG] Filenames match: {Match}", filenamesMatch);
             _logger.LogInformation("[MR] [DEBUG] === Filename Comparison Complete ===");
+            
+            // #region agent log - FILENAME-COMPARISON: Track filename comparison details
+            try
+            {
+                _logger.LogInformation("[MR] [DEBUG] [FILENAME-COMPARISON] EpisodeId={EpisodeId}, CurrentFileName='{CurrentFileName}', DesiredFileName='{DesiredFileName}', NormalizedCurrent='{NormalizedCurrent}', NormalizedDesired='{NormalizedDesired}', FilenamesMatch={FilenamesMatch}, EpisodeName='{EpisodeName}', EpisodeTitle='{EpisodeTitle}', Season={Season}, Episode={Episode}",
+                    episode.Id.ToString(), currentFileName, desiredFileName, normalizedCurrent, normalizedDesired, filenamesMatch,
+                    episode.Name ?? "NULL", episodeTitle ?? "NULL",
+                    seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                    episodeNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+                
+                var logData = new { 
+                    runId = "run1", 
+                    hypothesisId = "FILENAME-COMPARISON", 
+                    location = "RenameCoordinator.cs:2430", 
+                    message = "Filename comparison result", 
+                    data = new { 
+                        episodeId = episode.Id.ToString(),
+                        currentFileName = currentFileName,
+                        desiredFileName = desiredFileName,
+                        normalizedCurrent = normalizedCurrent,
+                        normalizedDesired = normalizedDesired,
+                        filenamesMatch = filenamesMatch,
+                        episodeName = episode.Name ?? "NULL",
+                        episodeTitle = episodeTitle ?? "NULL",
+                        seasonNumber = seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                        episodeNumber = episodeNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL"
+                    }, 
+                    timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() 
+                };
+                var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[MR] [DEBUG] [FILENAME-COMPARISON] ERROR logging filename comparison: {Error}", ex.Message);
+                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { runId = "run1", hypothesisId = "FILENAME-COMPARISON", location = "RenameCoordinator.cs:2430", message = "ERROR logging filename comparison", data = new { error = ex.Message }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+            }
+            // #endregion
             
             if (filenamesMatch)
             {
