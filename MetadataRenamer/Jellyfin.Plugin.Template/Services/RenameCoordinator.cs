@@ -797,11 +797,81 @@ public class RenameCoordinator
             var currentTime = DateTime.UtcNow;
             _seriesUpdateTimestamps.Enqueue(currentTime);
 
+            // #region agent log - SERIES-UPDATE-QUEUE: Track each series update added to queue
+            try
+            {
+                _logger.LogInformation("[MR] [DEBUG] [SERIES-UPDATE-QUEUE] === Series Update Added to Queue ===");
+                _logger.LogInformation("[MR] [DEBUG] [SERIES-UPDATE-QUEUE] Series: {Name}, ID: {Id}", name ?? "NULL", series.Id);
+                _logger.LogInformation("[MR] [DEBUG] [SERIES-UPDATE-QUEUE] Timestamp: {Timestamp}", currentTime.ToString("yyyy-MM-dd HH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture));
+                _logger.LogInformation("[MR] [DEBUG] [SERIES-UPDATE-QUEUE] Queue size BEFORE adding: {Count}", _seriesUpdateTimestamps.Count - 1);
+                _logger.LogInformation("[MR] [DEBUG] [SERIES-UPDATE-QUEUE] Queue size AFTER adding: {Count}", _seriesUpdateTimestamps.Count);
+                _logger.LogInformation("[MR] [DEBUG] [SERIES-UPDATE-QUEUE] Provider IDs Changed: {Changed}", providerIdsChanged);
+                _logger.LogInformation("[MR] [DEBUG] [SERIES-UPDATE-QUEUE] Is First Time: {IsFirstTime}", isFirstTime);
+                
+                var logData = new {
+                    runId = "run1",
+                    hypothesisId = "SERIES-UPDATE-QUEUE",
+                    location = "RenameCoordinator.cs:798",
+                    message = "Series update added to queue",
+                    data = new {
+                        seriesId = series.Id.ToString(),
+                        seriesName = name ?? "NULL",
+                        timestamp = currentTime.ToString("yyyy-MM-dd HH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture),
+                        queueSizeBefore = _seriesUpdateTimestamps.Count - 1,
+                        queueSizeAfter = _seriesUpdateTimestamps.Count,
+                        providerIdsChanged = providerIdsChanged,
+                        isFirstTime = isFirstTime,
+                        hasProviderIds = hasProviderIds
+                    },
+                    timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                };
+                var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[MR] [DEBUG] [SERIES-UPDATE-QUEUE] ERROR logging queue addition: {Error}", ex.Message);
+            }
+            // #endregion
+
             // Clean old timestamps outside the time window
+            var timestampsRemoved = 0;
             while (_seriesUpdateTimestamps.Count > 0 && (currentTime - _seriesUpdateTimestamps.Peek()).TotalSeconds > BulkUpdateTimeWindowSeconds)
             {
-                _seriesUpdateTimestamps.Dequeue();
+                var removedTimestamp = _seriesUpdateTimestamps.Dequeue();
+                timestampsRemoved++;
             }
+            
+            // #region agent log - SERIES-UPDATE-QUEUE-CLEAN: Track timestamp cleanup
+            if (timestampsRemoved > 0)
+            {
+                try
+                {
+                    _logger.LogInformation("[MR] [DEBUG] [SERIES-UPDATE-QUEUE-CLEAN] Removed {Count} old timestamps from queue", timestampsRemoved);
+                    _logger.LogInformation("[MR] [DEBUG] [SERIES-UPDATE-QUEUE-CLEAN] Queue size after cleanup: {Count}", _seriesUpdateTimestamps.Count);
+                    
+                    var logData = new {
+                        runId = "run1",
+                        hypothesisId = "SERIES-UPDATE-QUEUE-CLEAN",
+                        location = "RenameCoordinator.cs:804",
+                        message = "Old timestamps removed from queue",
+                        data = new {
+                            seriesId = series.Id.ToString(),
+                            seriesName = name ?? "NULL",
+                            timestampsRemoved = timestampsRemoved,
+                            queueSizeAfterCleanup = _seriesUpdateTimestamps.Count
+                        },
+                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                    };
+                    var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                    try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[MR] [DEBUG] [SERIES-UPDATE-QUEUE-CLEAN] ERROR logging cleanup: {Error}", ex.Message);
+                }
+            }
+            // #endregion
 
             // Check if this looks like "Replace all metadata" (bulk refresh)
             // IMPORTANT: Only trigger bulk processing if:
@@ -879,6 +949,42 @@ public class RenameCoordinator
 
             if (shouldTriggerBulkProcessing)
             {
+                // #region agent log - BULK-PROCESSING-TRIGGERED: Track when bulk processing is actually triggered
+                try
+                {
+                    _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-TRIGGERED] ===== BULK PROCESSING TRIGGERED =====");
+                    _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-TRIGGERED] Series that triggered it: {Name}, ID: {Id}", name ?? "NULL", series.Id);
+                    _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-TRIGGERED] Queue size: {Count}", _seriesUpdateTimestamps.Count);
+                    _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-TRIGGERED] Provider IDs Changed: {Changed}", providerIdsChanged);
+                    _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-TRIGGERED] Is First Time: {IsFirstTime}", isFirstTime);
+                    _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-TRIGGERED] Series Is Identified: {IsIdentified}", seriesIsIdentified);
+                    _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-TRIGGERED] Time Since Last Bulk: {Minutes} minutes", timeSinceLastBulkProcessing);
+                    
+                    var logData = new {
+                        runId = "run1",
+                        hypothesisId = "BULK-PROCESSING-TRIGGERED",
+                        location = "RenameCoordinator.cs:880",
+                        message = "Bulk processing triggered - ProcessAllSeriesInLibrary will be called",
+                        data = new {
+                            triggeringSeriesId = series.Id.ToString(),
+                            triggeringSeriesName = name ?? "NULL",
+                            queueSize = _seriesUpdateTimestamps.Count,
+                            providerIdsChanged = providerIdsChanged,
+                            isFirstTime = isFirstTime,
+                            seriesIsIdentified = seriesIsIdentified,
+                            timeSinceLastBulkProcessing = timeSinceLastBulkProcessing
+                        },
+                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                    };
+                    var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                    try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[MR] [DEBUG] [BULK-PROCESSING-TRIGGERED] ERROR logging trigger: {Error}", ex.Message);
+                }
+                // #endregion
+                
                 _logger.LogInformation("[MR] === Bulk Refresh Detected (Replace All Metadata) ===");
                 _logger.LogInformation("[MR] Detected {Count} series updates in {Seconds} seconds",
                     _seriesUpdateTimestamps.Count, BulkUpdateTimeWindowSeconds);
@@ -1912,6 +2018,33 @@ public class RenameCoordinator
     {
         try
         {
+            // #region agent log - PROCESS-ALL-SERIES-ENTRY: Track when ProcessAllSeriesInLibrary is called
+            try
+            {
+                _logger.LogInformation("[MR] [DEBUG] [PROCESS-ALL-SERIES-ENTRY] ===== ProcessAllSeriesInLibrary ENTRY =====");
+                _logger.LogInformation("[MR] [DEBUG] [PROCESS-ALL-SERIES-ENTRY] This method processes ALL series in the library");
+                _logger.LogInformation("[MR] [DEBUG] [PROCESS-ALL-SERIES-ENTRY] Called at: {Timestamp}", now.ToString("yyyy-MM-dd HH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture));
+                
+                var logData = new {
+                    runId = "run1",
+                    hypothesisId = "PROCESS-ALL-SERIES-ENTRY",
+                    location = "RenameCoordinator.cs:1911",
+                    message = "ProcessAllSeriesInLibrary called - will process all series",
+                    data = new {
+                        timestamp = now.ToString("yyyy-MM-dd HH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture),
+                        libraryManagerAvailable = _libraryManager != null
+                    },
+                    timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                };
+                var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[MR] [DEBUG] [PROCESS-ALL-SERIES-ENTRY] ERROR logging entry: {Error}", ex.Message);
+            }
+            // #endregion
+            
             if (_libraryManager == null)
             {
                 _logger.LogWarning("[MR] LibraryManager is not available. Cannot process all series in library.");
