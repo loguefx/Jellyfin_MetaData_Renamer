@@ -3625,9 +3625,38 @@ public class RenameCoordinator
             
             if (!Directory.Exists(path))
             {
-                _logger.LogWarning("[MR] [DEBUG] [SEASON-SKIP-PATH-NOT-EXISTS] SKIP: Season path does not exist on disk. Path={Path}, SeasonId={Id}, Name={Name}, SeasonNumber={SeasonNumber}", 
-                    path, season.Id, season.Name ?? "NULL", season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
-                return;
+                // Path may be stale after series folder rename - try to derive correct path
+                _logger.LogWarning("[MR] [DEBUG] [SEASON-PATH-STALE] Season path from metadata does not exist (may be stale after series folder rename). Attempting to derive correct path...");
+                _logger.LogWarning("[MR] [DEBUG] [SEASON-PATH-STALE] Stale path: {StalePath}", path);
+                
+                // Extract season folder name from stale path
+                var staleSeasonFolderName = Path.GetFileName(path);
+                _logger.LogInformation("[MR] [DEBUG] [SEASON-PATH-STALE] Extracted season folder name from stale path: {FolderName}", staleSeasonFolderName);
+                
+                // Get current series path (should be updated after rename)
+                var seriesPath = season.Series?.Path;
+                if (string.IsNullOrWhiteSpace(seriesPath))
+                {
+                    _logger.LogWarning("[MR] [DEBUG] [SEASON-SKIP-PATH-NOT-EXISTS] SKIP: Season path does not exist and cannot derive from series (series path is null). Path={Path}, SeasonId={Id}, Name={Name}, SeasonNumber={SeasonNumber}", 
+                        path, season.Id, season.Name ?? "NULL", season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+                    return;
+                }
+                
+                // Construct potential path using current series path + season folder name
+                var potentialSeasonPath = Path.Combine(seriesPath, staleSeasonFolderName);
+                _logger.LogInformation("[MR] [DEBUG] [SEASON-PATH-STALE] Derived potential path: {PotentialPath}", potentialSeasonPath);
+                
+                if (Directory.Exists(potentialSeasonPath))
+                {
+                    _logger.LogWarning("[MR] [DEBUG] [SEASON-PATH-FIX] Found season folder using derived path: {Path}", potentialSeasonPath);
+                    path = potentialSeasonPath; // Use the derived path
+                }
+                else
+                {
+                    _logger.LogWarning("[MR] [DEBUG] [SEASON-SKIP-PATH-NOT-EXISTS] SKIP: Season path does not exist on disk (tried both metadata path and derived path). MetadataPath={MetadataPath}, DerivedPath={DerivedPath}, SeasonId={Id}, Name={Name}, SeasonNumber={SeasonNumber}", 
+                        season.Path ?? "NULL", potentialSeasonPath, season.Id, season.Name ?? "NULL", season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+                    return;
+                }
             }
             
             _logger.LogInformation("[MR] [DEBUG] [SEASON-PATH-VALIDATION] Season path exists: {Path}", path);
