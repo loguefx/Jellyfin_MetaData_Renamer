@@ -674,6 +674,14 @@ public class RenameCoordinator
     /// <param name="forceProcessing">If true, processes the series even if provider IDs haven't changed (for bulk refresh).</param>
     private void HandleSeriesUpdate(Series series, PluginConfiguration cfg, DateTime now, bool forceProcessing = false)
     {
+        // Defensive check: Ensure RenameSeriesFolders is enabled
+        if (!cfg.RenameSeriesFolders)
+        {
+            _logger.LogInformation("[MR] [DEBUG] [SERIES-UPDATE-SKIP] SKIP: RenameSeriesFolders is disabled in configuration. Series: {Name}, Id={Id}", 
+                series.Name ?? "NULL", series.Id);
+            return;
+        }
+        
         _logger.LogInformation("[MR] Processing Series: Name={Name}, Id={Id}, Path={Path}", series.Name, series.Id, series.Path);
 
         // Per-item cooldown for series folder renaming
@@ -1625,6 +1633,14 @@ public class RenameCoordinator
     {
         try
         {
+            // Defensive check: Ensure RenameEpisodeFiles is enabled
+            if (!cfg.RenameEpisodeFiles)
+            {
+                _logger.LogInformation("[MR] [DEBUG] [PROCESS-ALL-EPISODES-SKIP] SKIP: RenameEpisodeFiles is disabled in configuration. Series: {Name}, ID: {Id}", 
+                    series.Name ?? "NULL", series.Id);
+                return;
+            }
+            
             // #region agent log - PROCESS-ALL-EPISODES-ENTRY: Track ProcessAllEpisodesFromSeries entry
             try
             {
@@ -2952,6 +2968,14 @@ public class RenameCoordinator
     /// </summary>
     private void HandleMovieUpdate(Movie movie, PluginConfiguration cfg, DateTime now)
     {
+        // Defensive check: Ensure RenameMovieFolders is enabled
+        if (!cfg.RenameMovieFolders)
+        {
+            _logger.LogInformation("[MR] [DEBUG] [MOVIE-UPDATE-SKIP] SKIP: RenameMovieFolders is disabled in configuration. Movie: {Name}, Id={Id}", 
+                movie.Name ?? "NULL", movie.Id);
+            return;
+        }
+        
         _logger.LogInformation("[MR] Processing Movie: Name={Name}, Id={Id}, Path={Path}", movie.Name, movie.Id, movie.Path);
 
         // Per-item cooldown
@@ -3560,6 +3584,14 @@ public class RenameCoordinator
     {
         try
         {
+            // Defensive check: Ensure RenameSeasonFolders is enabled
+            if (!cfg.RenameSeasonFolders)
+            {
+                _logger.LogInformation("[MR] [DEBUG] [SEASON-UPDATE-SKIP] SKIP: RenameSeasonFolders is disabled in configuration. Season: {Name}, Id={Id}", 
+                    season.Name ?? "NULL", season.Id);
+                return;
+            }
+            
             _logger.LogInformation("[MR] [DEBUG] [SEASON-UPDATE-ENTRY] === HandleSeasonUpdate Entry ===");
             _logger.LogInformation("[MR] [DEBUG] [SEASON-UPDATE-ENTRY] Season: Name={Name}, Id={Id}, Path={Path}, Season Number={SeasonNumber}", 
                 season.Name ?? "NULL", season.Id, season.Path ?? "NULL", season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
@@ -3797,6 +3829,14 @@ public class RenameCoordinator
         {
             var seasonNum = episode.ParentIndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL";
             var episodeNum = episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL";
+            
+            // Defensive check: Ensure RenameEpisodeFiles is enabled
+            if (!cfg.RenameEpisodeFiles)
+            {
+                _logger.LogInformation("[MR] [DEBUG] [EPISODE-UPDATE-SKIP] SKIP: RenameEpisodeFiles is disabled in configuration. Season={Season}, Episode={Episode}", 
+                    seasonNum, episodeNum);
+                return;
+            }
             // Calculate isSeason2Plus early for use in episode number validation
             var isSeason2Plus = (episode.ParentIndexNumber ?? -1) >= 2;
             
