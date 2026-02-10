@@ -516,39 +516,16 @@ public class PathRenameService
                     return;
                 }
                 
-                // Target file exists and is different - this is a duplicate episode metadata issue
-                // For Season 2+ episodes, append a suffix to avoid conflicts
-                if (isSeason2Plus)
-                {
-                    var baseName = Path.GetFileNameWithoutExtension(desiredFileName);
-                    var extension = fileExtension;
-                    var counter = 1;
-                    string alternativePath;
-                    
-                    do
-                    {
-                        var alternativeFileName = $"{baseName} ({counter}){extension}";
-                        alternativePath = Path.Combine(directory.FullName, alternativeFileName);
-                        counter++;
-                    } while (File.Exists(alternativePath) && counter < 100); // Safety limit
-                    
-                    if (counter >= 100)
-                    {
-                        _logger.LogError("[MR] ERROR: Cannot find alternative filename after 100 attempts. From: {From}, To: {To}", currentPath, newFullPath);
-                        return;
-                    }
-                    
-                    _logger.LogWarning("[MR] [DEBUG] [DUPLICATE-TARGET-HANDLED] Target file exists with different content. Using alternative filename for Season 2+ episode. Original target: {Original}, Alternative: {Alternative}, EpisodeId: {EpisodeId}", 
-                        newFullPath, alternativePath, episode.Id);
-                    newFullPath = alternativePath;
-                    newFileName = Path.GetFileName(alternativePath);
-                }
-                else
-                {
-                    _logger.LogError("[MR] ERROR: Target file already exists with different content. Cannot rename. From: {From}, To: {To}, EpisodeId: {EpisodeId}", 
-                        currentPath, newFullPath, episode.Id);
-                    return;
-                }
+                // Target file exists and is different - this indicates duplicate episode metadata in Jellyfin
+                // The plugin uses Jellyfin's metadata as-is, so if multiple episodes have the same metadata,
+                // they will try to rename to the same target. This is a Jellyfin metadata issue that needs
+                // to be fixed in Jellyfin (correct episode numbers and titles).
+                _logger.LogError("[MR] ERROR: Target file already exists with different content. This indicates duplicate episode metadata in Jellyfin (multiple episodes mapped to the same episode number/title). From: {From}, To: {To}, EpisodeId: {EpisodeId}, Season: {Season}, Episode: {Episode}", 
+                    currentPath, newFullPath, episode.Id,
+                    seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                    episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+                _logger.LogError("[MR] Please fix the episode metadata in Jellyfin (correct episode numbers and titles) and try again.");
+                return;
             }
 
             if (dryRun)

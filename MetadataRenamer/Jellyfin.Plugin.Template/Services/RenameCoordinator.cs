@@ -4311,6 +4311,39 @@ public class RenameCoordinator
 
             // Build desired file name (without extension) using METADATA VALUES ONLY
             var fileExtension = Path.GetExtension(path);
+            
+            // #region agent log - EPISODE-FILENAME-GENERATION: Track metadata values used for filename generation
+            try
+            {
+                System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", 
+                    System.Text.Json.JsonSerializer.Serialize(new {
+                        runId = "run1",
+                        hypothesisId = "EPISODE-FILENAME-GENERATION",
+                        location = "RenameCoordinator.cs:4314",
+                        message = "Generating episode filename from metadata",
+                        data = new {
+                            episodeId = episode.Id.ToString(),
+                            episodeName = episode.Name ?? "NULL",
+                            episodePath = path,
+                            seriesName = seriesName ?? "NULL",
+                            seasonNumber = seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                            episodeNumber = episodeNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                            episodeTitle = episodeTitle ?? "NULL",
+                            episodeTitleEmpty = string.IsNullOrWhiteSpace(episodeTitle),
+                            year = year?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                            formatTemplate = cfg.EpisodeFileFormat ?? "NULL",
+                            parentIndexNumber = episode.ParentIndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                            indexNumber = episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL"
+                        },
+                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                    }) + "\n");
+            }
+            catch (Exception logEx)
+            {
+                _logger.LogError(logEx, "[MR] [DEBUG] [EPISODE-FILENAME-GENERATION] ERROR logging: {Error}", logEx.Message);
+            }
+            // #endregion
+            
             var desiredFileName = SafeName.RenderEpisodeFileName(
                 cfg.EpisodeFileFormat,
                 seriesName,
@@ -4318,6 +4351,30 @@ public class RenameCoordinator
                 episodeNumber,
                 episodeTitle,
                 year);
+
+            // #region agent log - EPISODE-FILENAME-RESULT: Track the generated filename
+            try
+            {
+                System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", 
+                    System.Text.Json.JsonSerializer.Serialize(new {
+                        runId = "run1",
+                        hypothesisId = "EPISODE-FILENAME-RESULT",
+                        location = "RenameCoordinator.cs:4340",
+                        message = "Generated episode filename result",
+                        data = new {
+                            episodeId = episode.Id.ToString(),
+                            desiredFileName = desiredFileName + fileExtension,
+                            currentFileName = currentFileName + fileExtension,
+                            formatTemplate = cfg.EpisodeFileFormat ?? "NULL"
+                        },
+                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                    }) + "\n");
+            }
+            catch (Exception logEx)
+            {
+                _logger.LogError(logEx, "[MR] [DEBUG] [EPISODE-FILENAME-RESULT] ERROR logging: {Error}", logEx.Message);
+            }
+            // #endregion
 
             _logger.LogInformation("[MR] === Episode File Rename Details ===");
             _logger.LogInformation("[MR] Current File: {Current}", currentFileName + fileExtension);
