@@ -3795,6 +3795,8 @@ public class RenameCoordinator
         {
             var seasonNum = episode.ParentIndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL";
             var episodeNum = episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL";
+            // Calculate isSeason2Plus early for use in episode number validation
+            var isSeason2Plus = (episode.ParentIndexNumber ?? -1) >= 2;
             
             // #region agent log - EPISODE-UPDATE-ENTRY: Track all HandleEpisodeUpdate calls
             try
@@ -4208,6 +4210,8 @@ public class RenameCoordinator
 
             // SAFETY CHECK: Parse episode number from filename and compare with metadata
             // Only rename if the episode number in filename matches metadata episode number
+            // NOTE: For Season 2+ episodes, we relax this check because filenames may use absolute episode numbers
+            // or incorrect numbering, but Jellyfin metadata is authoritative
             var filenameEpisodeNumber = SafeName.ParseEpisodeNumberFromFileName(currentFileName);
             
             _logger.LogInformation("[MR] === Episode Number Validation ===");
@@ -4221,14 +4225,29 @@ public class RenameCoordinator
             {
                 if (filenameEpisodeNumber.Value != episodeNumber.Value)
                 {
-                    _logger.LogWarning("[MR] [DEBUG] [EPISODE-SKIP-EP-NUMBER-MISMATCH] SKIP: Episode number mismatch! Filename says episode {FilenameEp}, but metadata says episode {MetadataEp}. " +
-                        "This prevents incorrect renames (e.g., renaming 'episode 1' to 'episode 5'). " +
-                        "Please verify the file is correctly identified in Jellyfin. Season={Season}, Episode={Episode}",
-                        filenameEpisodeNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                        episodeNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                        seasonNum, episodeNum);
-                    _logger.LogInformation("[MR] ===== Episode Processing Complete (Skipped - Episode Number Mismatch) =====");
-                    return;
+                    // For Season 2+ episodes, relax the episode number mismatch check
+                    // because filenames may have incorrect episode numbers (e.g., absolute episode numbers)
+                    // but Jellyfin metadata is authoritative
+                    if (isSeason2Plus)
+                    {
+                        _logger.LogWarning("[MR] [DEBUG] [SEASON2+-EP-NUMBER-MISMATCH] Season 2+ episode: Filename says episode {FilenameEp}, but metadata says episode {MetadataEp}. " +
+                            "Proceeding with rename using metadata (Season 2+ episodes may have incorrect filename numbering). Season={Season}, Episode={Episode}",
+                            filenameEpisodeNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                            episodeNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                            seasonNum, episodeNum);
+                        // Continue processing - don't skip
+                    }
+                    else
+                    {
+                        _logger.LogWarning("[MR] [DEBUG] [EPISODE-SKIP-EP-NUMBER-MISMATCH] SKIP: Episode number mismatch! Filename says episode {FilenameEp}, but metadata says episode {MetadataEp}. " +
+                            "This prevents incorrect renames (e.g., renaming 'episode 1' to 'episode 5'). " +
+                            "Please verify the file is correctly identified in Jellyfin. Season={Season}, Episode={Episode}",
+                            filenameEpisodeNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                            episodeNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                            seasonNum, episodeNum);
+                        _logger.LogInformation("[MR] ===== Episode Processing Complete (Skipped - Episode Number Mismatch) =====");
+                        return;
+                    }
                 }
                 else
                 {
