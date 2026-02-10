@@ -456,11 +456,44 @@ public class RenameCoordinator
             // Handle Season items
             if (e.Item is Season season)
             {
+                // #region agent log - SEASON-ITEM-UPDATED: Track all season ItemUpdated events
+                try
+                {
+                    _logger.LogInformation("[MR] [DEBUG] [SEASON-ITEM-UPDATED] Season ItemUpdated: Id={Id}, Name='{Name}', Path={Path}, SeasonNumber={SeasonNumber}, SeriesId={SeriesId}, SeriesName='{SeriesName}'",
+                        season.Id, season.Name ?? "NULL", season.Path ?? "NULL", 
+                        season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                        season.Series?.Id.ToString() ?? "NULL", season.Series?.Name ?? "NULL");
+                    
+                    var logData = new { 
+                        runId = "run1", 
+                        hypothesisId = "SEASON-ITEM-UPDATED", 
+                        location = "RenameCoordinator.cs:457", 
+                        message = "Season ItemUpdated event received", 
+                        data = new { 
+                            seasonId = season.Id.ToString(),
+                            seasonName = season.Name ?? "NULL",
+                            seasonPath = season.Path ?? "NULL",
+                            seasonNumber = season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                            seriesId = season.Series?.Id.ToString() ?? "NULL",
+                            seriesName = season.Series?.Name ?? "NULL",
+                            seriesPath = season.Series?.Path ?? "NULL"
+                        }, 
+                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() 
+                    };
+                    var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                    try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[MR] [DEBUG] [SEASON-ITEM-UPDATED] ERROR logging season event: {Error}", ex.Message);
+                }
+                // #endregion
+                
                 // Debounce global spam for Season items only
                 var timeSinceLastAction = now - _lastGlobalActionUtc;
                 if (timeSinceLastAction < _globalMinInterval)
                 {
-                    _logger.LogInformation("[MR] SKIP: Global debounce active. Time since last action: {Seconds} seconds (min: {MinSeconds})",
+                    _logger.LogInformation("[MR] [DEBUG] [SEASON-SKIP-GLOBAL-DEBOUNCE] SKIP: Global debounce active. Time since last action: {Seconds} seconds (min: {MinSeconds})",
                         timeSinceLastAction.TotalSeconds, _globalMinInterval.TotalSeconds);
                     return;
                 }
@@ -468,10 +501,36 @@ public class RenameCoordinator
 
                 if (!cfg.RenameSeasonFolders)
                 {
-                    _logger.LogInformation("[MR] SKIP: RenameSeasonFolders is disabled in configuration");
+                    _logger.LogInformation("[MR] [DEBUG] [SEASON-SKIP-CONFIG-DISABLED] SKIP: RenameSeasonFolders is disabled in configuration");
                     return;
                 }
+                
+                // #region agent log - SEASON-PROCESSING-START: Track when season processing starts
+                try
+                {
+                    _logger.LogInformation("[MR] [DEBUG] [SEASON-PROCESSING-START] Starting HandleSeasonUpdate for Season: {Name}, ID: {Id}, SeasonNumber: {SeasonNumber}",
+                        season.Name ?? "NULL", season.Id, season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[MR] [DEBUG] [SEASON-PROCESSING-START] ERROR logging season processing start: {Error}", ex.Message);
+                }
+                // #endregion
+                
                 HandleSeasonUpdate(season, cfg, now);
+                
+                // #region agent log - SEASON-PROCESSING-COMPLETE: Track when season processing completes
+                try
+                {
+                    _logger.LogInformation("[MR] [DEBUG] [SEASON-PROCESSING-COMPLETE] HandleSeasonUpdate completed for Season: {Name}, ID: {Id}",
+                        season.Name ?? "NULL", season.Id);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[MR] [DEBUG] [SEASON-PROCESSING-COMPLETE] ERROR logging season processing complete: {Error}", ex.Message);
+                }
+                // #endregion
+                
             return;
         }
 
@@ -794,8 +853,21 @@ public class RenameCoordinator
             // #endregion
 
             // Track series update for bulk processing detection
+            // IMPORTANT: Only add to queue if provider IDs have NOT changed
+            // If provider IDs changed (Identify flow), don't count this towards bulk processing detection
             var currentTime = DateTime.UtcNow;
-            _seriesUpdateTimestamps.Enqueue(currentTime);
+            
+            // Only add to queue if this is NOT an "Identify" operation (provider IDs unchanged)
+            // This prevents "Identify" from triggering bulk processing
+            if (!providerIdsChanged && !isFirstTime)
+            {
+                _seriesUpdateTimestamps.Enqueue(currentTime);
+            }
+            else
+            {
+                _logger.LogInformation("[MR] [DEBUG] [SERIES-UPDATE-QUEUE-SKIP] Skipping queue addition - Provider IDs changed (Identify flow) or first time. ProviderIdsChanged={Changed}, IsFirstTime={FirstTime}",
+                    providerIdsChanged, isFirstTime);
+            }
 
             // #region agent log - SERIES-UPDATE-QUEUE: Track each series update added to queue
             try
@@ -817,11 +889,12 @@ public class RenameCoordinator
                         seriesId = series.Id.ToString(),
                         seriesName = name ?? "NULL",
                         timestamp = currentTime.ToString("yyyy-MM-dd HH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture),
-                        queueSizeBefore = _seriesUpdateTimestamps.Count - 1,
+                        queueSizeBefore = providerIdsChanged || isFirstTime ? _seriesUpdateTimestamps.Count : _seriesUpdateTimestamps.Count - 1,
                         queueSizeAfter = _seriesUpdateTimestamps.Count,
                         providerIdsChanged = providerIdsChanged,
                         isFirstTime = isFirstTime,
-                        hasProviderIds = hasProviderIds
+                        hasProviderIds = hasProviderIds,
+                        addedToQueue = !providerIdsChanged && !isFirstTime
                     },
                     timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
                 };
@@ -3028,8 +3101,11 @@ public class RenameCoordinator
     {
         try
         {
-            _logger.LogInformation("[MR] Processing Season: Name={Name}, Id={Id}, Path={Path}, Season Number={SeasonNumber}", 
-                season.Name, season.Id, season.Path, season.IndexNumber);
+            _logger.LogInformation("[MR] [DEBUG] [SEASON-UPDATE-ENTRY] === HandleSeasonUpdate Entry ===");
+            _logger.LogInformation("[MR] [DEBUG] [SEASON-UPDATE-ENTRY] Season: Name={Name}, Id={Id}, Path={Path}, Season Number={SeasonNumber}", 
+                season.Name ?? "NULL", season.Id, season.Path ?? "NULL", season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+            _logger.LogInformation("[MR] [DEBUG] [SEASON-UPDATE-ENTRY] Series: Id={SeriesId}, Name={SeriesName}, Path={SeriesPath}",
+                season.Series?.Id.ToString() ?? "NULL", season.Series?.Name ?? "NULL", season.Series?.Path ?? "NULL");
 
             // Per-item cooldown
             if (_lastAttemptUtcByItem.TryGetValue(season.Id, out var lastTry))
@@ -3038,8 +3114,8 @@ public class RenameCoordinator
                 if (timeSinceLastTry < cfg.PerItemCooldownSeconds)
                 {
                     _logger.LogInformation(
-                        "[MR] SKIP: Cooldown active. SeasonId={Id}, Name={Name}, Time since last try: {Seconds} seconds (cooldown: {CooldownSeconds})",
-                        season.Id, season.Name, timeSinceLastTry.ToString(System.Globalization.CultureInfo.InvariantCulture), cfg.PerItemCooldownSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                        "[MR] [DEBUG] [SEASON-SKIP-COOLDOWN] SKIP: Cooldown active. SeasonId={Id}, Name={Name}, Time since last try: {Seconds} seconds (cooldown: {CooldownSeconds})",
+                        season.Id, season.Name ?? "NULL", timeSinceLastTry.ToString(System.Globalization.CultureInfo.InvariantCulture), cfg.PerItemCooldownSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
                     return;
                 }
             }
@@ -3049,15 +3125,21 @@ public class RenameCoordinator
             var path = season.Path;
             if (string.IsNullOrWhiteSpace(path))
             {
-                _logger.LogWarning("[MR] SKIP: Season has no path. SeasonId={Id}, Name={Name}", season.Id, season.Name);
-            return;
-        }
-
-            if (!Directory.Exists(path))
-            {
-                _logger.LogWarning("[MR] SKIP: Season path does not exist on disk. Path={Path}, SeasonId={Id}, Name={Name}", path, season.Id, season.Name);
+                _logger.LogWarning("[MR] [DEBUG] [SEASON-SKIP-NO-PATH] SKIP: Season has no path. SeasonId={Id}, Name={Name}, SeasonNumber={SeasonNumber}", 
+                    season.Id, season.Name ?? "NULL", season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
                 return;
             }
+
+            _logger.LogInformation("[MR] [DEBUG] [SEASON-PATH-VALIDATION] Validating season path: {Path}", path);
+            
+            if (!Directory.Exists(path))
+            {
+                _logger.LogWarning("[MR] [DEBUG] [SEASON-SKIP-PATH-NOT-EXISTS] SKIP: Season path does not exist on disk. Path={Path}, SeasonId={Id}, Name={Name}, SeasonNumber={SeasonNumber}", 
+                    path, season.Id, season.Name ?? "NULL", season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+                return;
+            }
+            
+            _logger.LogInformation("[MR] [DEBUG] [SEASON-PATH-VALIDATION] Season path exists: {Path}", path);
 
             _logger.LogInformation("[MR] Season path verified: {Path}", path);
 
@@ -3074,9 +3156,13 @@ public class RenameCoordinator
 
             if (!seasonNumber.HasValue)
             {
-                _logger.LogWarning("[MR] SKIP: Season missing season number. SeasonId={Id}, Name={Name}", season.Id, season.Name);
+                _logger.LogWarning("[MR] [DEBUG] [SEASON-SKIP-NO-SEASON-NUMBER] SKIP: Season missing season number. SeasonId={Id}, Name={Name}, Path={Path}", 
+                    season.Id, season.Name ?? "NULL", path);
                 return;
             }
+            
+            _logger.LogInformation("[MR] [DEBUG] [SEASON-METADATA-VALIDATION] Season metadata validated: SeasonNumber={SeasonNumber}, SeasonName={SeasonName}", 
+                seasonNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture), seasonName);
 
             // Build desired folder name using METADATA VALUES ONLY
             var desiredFolderName = SafeName.RenderSeasonFolder(

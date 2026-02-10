@@ -220,97 +220,136 @@ public class PathRenameService
 
         try
         {
-            _logger.LogInformation("[MR] === TryRenameSeasonFolder Called ===");
-            _logger.LogInformation("[MR] Season: {Name}, ID: {Id}, Season Number: {SeasonNumber}", season.Name, season.Id, season.IndexNumber);
-            _logger.LogInformation("[MR] Desired Folder Name: {Desired}", desiredFolderName);
-            _logger.LogInformation("[MR] Dry Run: {DryRun}", dryRun);
+            _logger.LogInformation("[MR] [DEBUG] [SEASON-RENAME-SERVICE-ENTRY] === TryRenameSeasonFolder Called ===");
+            _logger.LogInformation("[MR] [DEBUG] [SEASON-RENAME-SERVICE-ENTRY] Season: {Name}, ID: {Id}, Season Number: {SeasonNumber}", 
+                season.Name ?? "NULL", season.Id, season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+            _logger.LogInformation("[MR] [DEBUG] [SEASON-RENAME-SERVICE-ENTRY] Desired Folder Name: {Desired}", desiredFolderName);
+            _logger.LogInformation("[MR] [DEBUG] [SEASON-RENAME-SERVICE-ENTRY] Dry Run: {DryRun}", dryRun);
+            _logger.LogInformation("[MR] [DEBUG] [SEASON-RENAME-SERVICE-ENTRY] Series: {SeriesName}, SeriesId: {SeriesId}",
+                season.Series?.Name ?? "NULL", season.Series?.Id.ToString() ?? "NULL");
 
             currentPath = season.Path;
             if (string.IsNullOrWhiteSpace(currentPath))
             {
-                _logger.LogWarning("[MR] SKIP: Season.Path is null or empty");
+                _logger.LogWarning("[MR] [DEBUG] [SEASON-RENAME-SKIP-NO-PATH] SKIP: Season.Path is null or empty. SeasonId={Id}, SeasonNumber={SeasonNumber}", 
+                    season.Id, season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
                 return;
             }
 
-            _logger.LogInformation("[MR] Current Path: {Path}", currentPath);
+            _logger.LogInformation("[MR] [DEBUG] [SEASON-RENAME-PATH-VALIDATION] Current Path: {Path}", currentPath);
 
             var currentDir = new DirectoryInfo(currentPath);
             if (!currentDir.Exists)
             {
-                _logger.LogError("[MR] ERROR: Season folder does not exist: {Path}", currentPath);
+                _logger.LogError("[MR] [DEBUG] [SEASON-RENAME-ERROR-PATH-NOT-EXISTS] ERROR: Season folder does not exist: {Path}, SeasonId={Id}, SeasonNumber={SeasonNumber}", 
+                    currentPath, season.Id, season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
                 return;
             }
 
-            _logger.LogInformation("[MR] Current Directory Name: {Name}", currentDir.Name);
-            _logger.LogInformation("[MR] Current Directory Exists: {Exists}", currentDir.Exists);
+            _logger.LogInformation("[MR] [DEBUG] [SEASON-RENAME-PATH-VALIDATION] Current Directory Name: {Name}", currentDir.Name);
+            _logger.LogInformation("[MR] [DEBUG] [SEASON-RENAME-PATH-VALIDATION] Current Directory Exists: {Exists}", currentDir.Exists);
+            _logger.LogInformation("[MR] [DEBUG] [SEASON-RENAME-PATH-VALIDATION] Current Directory FullName: {FullName}", currentDir.FullName);
 
             var parent = currentDir.Parent;
             if (parent == null)
             {
-                _logger.LogError("[MR] ERROR: Cannot rename root directory: {Path}", currentPath);
+                _logger.LogError("[MR] [DEBUG] [SEASON-RENAME-ERROR-NO-PARENT] ERROR: Cannot rename root directory: {Path}, SeasonId={Id}", 
+                    currentPath, season.Id);
                 return;
             }
 
-            _logger.LogInformation("[MR] Parent Directory: {Parent}", parent.FullName);
+            _logger.LogInformation("[MR] [DEBUG] [SEASON-RENAME-PATH-VALIDATION] Parent Directory: {Parent}, Exists: {Exists}", parent.FullName, parent.Exists);
 
             if (string.Equals(currentDir.Name, desiredFolderName, StringComparison.OrdinalIgnoreCase))
             {
-                _logger.LogInformation("[MR] SKIP: Folder name already matches desired name. Current: {Current}, Desired: {Desired}", currentDir.Name, desiredFolderName);
+                _logger.LogInformation("[MR] [DEBUG] [SEASON-RENAME-SKIP-ALREADY-MATCHES] SKIP: Folder name already matches desired name. Current: {Current}, Desired: {Desired}, SeasonId={Id}, SeasonNumber={SeasonNumber}", 
+                    currentDir.Name, desiredFolderName, season.Id, season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
                 return;
             }
+            
+            _logger.LogInformation("[MR] [DEBUG] [SEASON-RENAME-COMPARISON] Folder names differ - proceeding with rename. Current: '{Current}', Desired: '{Desired}'", 
+                currentDir.Name, desiredFolderName);
 
             newFullPath = Path.Combine(parent.FullName, desiredFolderName);
-            _logger.LogInformation("[MR] New Full Path: {NewPath}", newFullPath);
+            _logger.LogInformation("[MR] [DEBUG] [SEASON-RENAME-PATH-CALCULATION] New Full Path: {NewPath}", newFullPath);
+            _logger.LogInformation("[MR] [DEBUG] [SEASON-RENAME-PATH-CALCULATION] Parent exists: {Exists}, Parent is writable: {Writable}", 
+                parent.Exists, parent.Exists && (new DirectoryInfo(parent.FullName).Attributes & System.IO.FileAttributes.ReadOnly) == 0);
 
             if (Directory.Exists(newFullPath))
             {
-                _logger.LogError("[MR] ERROR: Target folder already exists. Cannot rename. From: {From}, To: {To}", currentPath, newFullPath);
+                _logger.LogError("[MR] [DEBUG] [SEASON-RENAME-ERROR-TARGET-EXISTS] ERROR: Target folder already exists. Cannot rename. From: {From}, To: {To}, SeasonId={Id}, SeasonNumber={SeasonNumber}", 
+                    currentPath, newFullPath, season.Id, season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
                 return;
             }
 
             if (dryRun)
             {
-                _logger.LogWarning("[MR] DRY RUN MODE: Would rename {From} -> {To}", currentPath, newFullPath);
-                _logger.LogWarning("[MR] DRY RUN: No actual rename performed. Disable Dry Run mode to perform actual renames.");
+                _logger.LogWarning("[MR] [DEBUG] [SEASON-RENAME-DRY-RUN] DRY RUN MODE: Would rename {From} -> {To}, SeasonId={Id}, SeasonNumber={SeasonNumber}", 
+                    currentPath, newFullPath, season.Id, season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+                _logger.LogWarning("[MR] [DEBUG] [SEASON-RENAME-DRY-RUN] DRY RUN: No actual rename performed. Disable Dry Run mode to perform actual renames.");
                 return;
             }
 
-            _logger.LogInformation("[MR] === Attempting Actual Rename ===");
-            _logger.LogInformation("[MR] From: {From}", currentPath);
-            _logger.LogInformation("[MR] To: {To}", newFullPath);
+            _logger.LogInformation("[MR] [DEBUG] [SEASON-RENAME-ATTEMPT] === Attempting Actual Rename ===");
+            _logger.LogInformation("[MR] [DEBUG] [SEASON-RENAME-ATTEMPT] From: {From}", currentPath);
+            _logger.LogInformation("[MR] [DEBUG] [SEASON-RENAME-ATTEMPT] To: {To}", newFullPath);
+            _logger.LogInformation("[MR] [DEBUG] [SEASON-RENAME-ATTEMPT] SeasonId={Id}, SeasonNumber={SeasonNumber}", 
+                season.Id, season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
             
-            Directory.Move(currentPath, newFullPath);
-            
-            _logger.LogInformation("[MR] ✓✓✓ SUCCESS: Season folder renamed successfully!");
-            _logger.LogInformation("[MR] Old: {From}", currentPath);
-            _logger.LogInformation("[MR] New: {To}", newFullPath);
-            
-            // Verify the rename
-            if (Directory.Exists(newFullPath))
+            try
             {
-                _logger.LogInformation("[MR] ✓ Verification: New folder exists");
+                Directory.Move(currentPath, newFullPath);
+                
+                _logger.LogInformation("[MR] [DEBUG] [SEASON-RENAME-SUCCESS] ✓✓✓ SUCCESS: Season folder renamed successfully!");
+                _logger.LogInformation("[MR] [DEBUG] [SEASON-RENAME-SUCCESS] Old: {From}", currentPath);
+                _logger.LogInformation("[MR] [DEBUG] [SEASON-RENAME-SUCCESS] New: {To}", newFullPath);
+                _logger.LogInformation("[MR] [DEBUG] [SEASON-RENAME-SUCCESS] SeasonId={Id}, SeasonNumber={SeasonNumber}", 
+                    season.Id, season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+                
+                // Verify the rename
+                if (Directory.Exists(newFullPath))
+                {
+                    _logger.LogInformation("[MR] [DEBUG] [SEASON-RENAME-VERIFICATION] ✓ Verification: New folder exists at {Path}", newFullPath);
+                }
+                else
+                {
+                    _logger.LogError("[MR] [DEBUG] [SEASON-RENAME-VERIFICATION-FAILED] ✗ Verification FAILED: New folder does not exist after rename! Expected: {Path}, SeasonId={Id}", 
+                        newFullPath, season.Id);
+                }
             }
-            else
+            catch (Exception renameEx)
             {
-                _logger.LogError("[MR] ✗ Verification FAILED: New folder does not exist after rename!");
+                _logger.LogError(renameEx, "[MR] [DEBUG] [SEASON-RENAME-ERROR-DURING-MOVE] ERROR during Directory.Move: Exception Type={Type}, Message={Message}, SeasonId={Id}, SeasonNumber={SeasonNumber}", 
+                    renameEx.GetType().FullName, renameEx.Message, season.Id, season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+                _logger.LogError("[MR] [DEBUG] [SEASON-RENAME-ERROR-DURING-MOVE] Stack Trace: {StackTrace}", renameEx.StackTrace ?? "N/A");
+                throw; // Re-throw to be caught by outer catch blocks
             }
         }
         catch (UnauthorizedAccessException ex)
         {
-            _logger.LogError(ex, "[MR] ERROR: UnauthorizedAccessException - Permission denied. From: {From}, To: {To}", currentPath, newFullPath);
+            _logger.LogError(ex, "[MR] [DEBUG] [SEASON-RENAME-ERROR-UNAUTHORIZED] ERROR: UnauthorizedAccessException - Permission denied. From: {From}, To: {To}, SeasonId={Id}, SeasonNumber={SeasonNumber}", 
+                currentPath, newFullPath, season.Id, season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+            _logger.LogError("[MR] [DEBUG] [SEASON-RENAME-ERROR-UNAUTHORIZED] Stack Trace: {StackTrace}", ex.StackTrace ?? "N/A");
         }
         catch (DirectoryNotFoundException ex)
         {
-            _logger.LogError(ex, "[MR] ERROR: DirectoryNotFoundException - Source directory not found. Path: {Path}", currentPath);
+            _logger.LogError(ex, "[MR] [DEBUG] [SEASON-RENAME-ERROR-DIRECTORY-NOT-FOUND] ERROR: DirectoryNotFoundException - Source directory not found. Path: {Path}, SeasonId={Id}, SeasonNumber={SeasonNumber}", 
+                currentPath, season.Id, season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+            _logger.LogError("[MR] [DEBUG] [SEASON-RENAME-ERROR-DIRECTORY-NOT-FOUND] Stack Trace: {StackTrace}", ex.StackTrace ?? "N/A");
         }
         catch (IOException ex)
         {
-            _logger.LogError(ex, "[MR] ERROR: IOException - File system error. From: {From}, To: {To}, Message: {Message}", currentPath, newFullPath, ex.Message);
+            _logger.LogError(ex, "[MR] [DEBUG] [SEASON-RENAME-ERROR-IO] ERROR: IOException - File system error. From: {From}, To: {To}, Message: {Message}, SeasonId={Id}, SeasonNumber={SeasonNumber}", 
+                currentPath, newFullPath, ex.Message, season.Id, season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+            _logger.LogError("[MR] [DEBUG] [SEASON-RENAME-ERROR-IO] Stack Trace: {StackTrace}", ex.StackTrace ?? "N/A");
+            _logger.LogError("[MR] [DEBUG] [SEASON-RENAME-ERROR-IO] Inner Exception: {InnerException}", ex.InnerException?.Message ?? "N/A");
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "[MR] ERROR: Unexpected exception during rename. Type: {Type}, Message: {Message}", ex.GetType().Name, ex.Message);
-            _logger.LogError("[MR] Stack Trace: {StackTrace}", ex.StackTrace ?? "N/A");
+            _logger.LogError(ex, "[MR] [DEBUG] [SEASON-RENAME-ERROR-UNEXPECTED] ERROR: Unexpected exception during rename. Type: {Type}, Message: {Message}, SeasonId={Id}, SeasonNumber={SeasonNumber}", 
+                ex.GetType().FullName, ex.Message, season.Id, season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+            _logger.LogError("[MR] [DEBUG] [SEASON-RENAME-ERROR-UNEXPECTED] Stack Trace: {StackTrace}", ex.StackTrace ?? "N/A");
+            _logger.LogError("[MR] [DEBUG] [SEASON-RENAME-ERROR-UNEXPECTED] Inner Exception: {InnerException}", ex.InnerException?.Message ?? "N/A");
         }
     }
 
