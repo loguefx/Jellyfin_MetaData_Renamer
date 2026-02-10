@@ -613,20 +613,28 @@ public class RenameCoordinator
     {
         _logger.LogInformation("[MR] Processing Series: Name={Name}, Id={Id}, Path={Path}", series.Name, series.Id, series.Path);
 
-        // Per-item cooldown
+        // Per-item cooldown for series folder renaming
+        // NOTE: We check cooldown here but may still process episodes even if series folder rename is skipped
+        bool seriesRenameOnCooldown = false;
         if (_lastAttemptUtcByItem.TryGetValue(series.Id, out var lastTry))
         {
                 var timeSinceLastTry = (now - lastTry).TotalSeconds;
                 if (timeSinceLastTry < cfg.PerItemCooldownSeconds)
             {
                     _logger.LogInformation(
-                        "[MR] SKIP: Cooldown active. SeriesId={Id}, Name={Name}, Time since last try: {Seconds} seconds (cooldown: {CooldownSeconds})",
+                        "[MR] SKIP: Cooldown active for series folder rename. SeriesId={Id}, Name={Name}, Time since last try: {Seconds} seconds (cooldown: {CooldownSeconds})",
                         series.Id, series.Name, timeSinceLastTry.ToString(System.Globalization.CultureInfo.InvariantCulture), cfg.PerItemCooldownSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
-                return;
+                    _logger.LogInformation("[MR] [DEBUG] Cooldown active, but will still check if episodes need processing");
+                seriesRenameOnCooldown = true;
+                // Don't return here - continue to process episodes even if series folder rename is on cooldown
             }
         }
 
+        // Only update cooldown timestamp if we're not on cooldown (to avoid resetting the timer)
+        if (!seriesRenameOnCooldown)
+        {
         _lastAttemptUtcByItem[series.Id] = now;
+        }
 
         var path = series.Path;
         if (string.IsNullOrWhiteSpace(path))
@@ -1140,6 +1148,10 @@ public class RenameCoordinator
                 }
             }
 
+            // Only attempt series folder rename if not on cooldown
+            bool renameSuccessful = false;
+            if (!seriesRenameOnCooldown)
+            {
             // Build final desired folder name: Name (Year) [provider-id] or Name (Year) if no provider IDs
             var currentFolderName = Path.GetFileName(path);
             
@@ -1180,7 +1192,12 @@ public class RenameCoordinator
             try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "D", location = "RenameCoordinator.cs:186", message = "Attempting rename", data = new { seriesName = name, currentPath = path, desiredFolderName = desiredFolderName, dryRun = cfg.DryRun }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
             // #endregion
 
-            var renameSuccessful = _pathRenamer.TryRenameSeriesFolder(series, desiredFolderName, cfg.DryRun);
+                renameSuccessful = _pathRenamer.TryRenameSeriesFolder(series, desiredFolderName, cfg.DryRun);
+            }
+            else
+            {
+                _logger.LogInformation("[MR] [DEBUG] Series folder rename skipped due to cooldown, but will still process episodes if needed");
+            }
 
             // DEBUG: Log detailed decision-making for episode processing
             _logger.LogInformation("[MR] === Episode Processing Decision ===");
@@ -1214,14 +1231,21 @@ public class RenameCoordinator
             if (shouldProcessEpisodes)
             {
                 // Check if we've already processed this series recently (avoid duplicate processing)
+                // Process episodes if:
+                // - Provider IDs changed (series was identified)
+                // - Series hasn't been processed for episodes yet
+                // - Series folder was renamed (and not already processed)
+                // - OR if series folder rename was skipped due to cooldown but episodes still need processing
                 var shouldReprocess = providerIdsChanged || 
                                      !_seriesProcessedForEpisodes.Contains(series.Id) ||
-                                     (renameSuccessful && !_seriesProcessedForEpisodes.Contains(series.Id));
+                                     (renameSuccessful && !_seriesProcessedForEpisodes.Contains(series.Id)) ||
+                                     (seriesRenameOnCooldown && !_seriesProcessedForEpisodes.Contains(series.Id));
 
                 _logger.LogInformation("[MR] [DEBUG] shouldReprocess: {ShouldReprocess}", shouldReprocess);
                 _logger.LogInformation("[MR] [DEBUG]   - providerIdsChanged: {Changed}", providerIdsChanged);
                 _logger.LogInformation("[MR] [DEBUG]   - Not in processed set: {NotProcessed}", !_seriesProcessedForEpisodes.Contains(series.Id));
                 _logger.LogInformation("[MR] [DEBUG]   - renameSuccessful: {Renamed}", renameSuccessful);
+                _logger.LogInformation("[MR] [DEBUG]   - seriesRenameOnCooldown: {OnCooldown}", seriesRenameOnCooldown);
 
                 if (shouldReprocess)
                 {
@@ -2916,7 +2940,7 @@ public class RenameCoordinator
                     // Title is empty but not a filename pattern - this is acceptable, use episode number only
                     _logger.LogInformation("[MR] [DEBUG] Episode title is empty but not a filename pattern. Will use episode number only for renaming.");
                     _logger.LogInformation("[MR] [DEBUG] EpisodeId={Id}", episode.Id);
-                    episodeTitle = string.Empty; // Use empty string, format will handle it
+                episodeTitle = string.Empty; // Use empty string, format will handle it
                 }
             }
             else
