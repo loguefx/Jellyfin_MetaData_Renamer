@@ -368,10 +368,47 @@ public class PathRenameService
 
         try
         {
+            var seasonNumber = episode.ParentIndexNumber;
+            var isSeason2Plus = seasonNumber.HasValue && seasonNumber.Value >= 2;
             _logger.LogInformation("[MR] === TryRenameEpisodeFile Called ===");
             _logger.LogInformation("[MR] Episode: {Name}, ID: {Id}", episode.Name, episode.Id);
+            _logger.LogInformation("[MR] Season: {Season}, Episode: {Episode} (Season2Plus={IsSeason2Plus})", 
+                seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                isSeason2Plus);
             _logger.LogInformation("[MR] Desired File Name: {Desired}", desiredFileName + fileExtension);
             _logger.LogInformation("[MR] Dry Run: {DryRun}", dryRun);
+            
+            // #region agent log - MULTI-SEASON-RENAME-ENTRY: Track Season 2+ rename entry
+            if (isSeason2Plus)
+            {
+                try
+                {
+                    var logData = new {
+                        runId = "run1",
+                        hypothesisId = "MULTI-SEASON-RENAME-ENTRY",
+                        location = "PathRenameService.cs:371",
+                        message = "TryRenameEpisodeFile called for Season 2+ episode",
+                        data = new {
+                            episodeId = episode.Id.ToString(),
+                            episodeName = episode.Name ?? "NULL",
+                            seasonNumber = seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                            episodeNumber = episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                            desiredFileName = desiredFileName + fileExtension,
+                            dryRun = dryRun,
+                            currentPath = overridePath ?? episode.Path ?? "NULL"
+                        },
+                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                    };
+                    var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                    try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+                }
+                catch (Exception logEx)
+                {
+                    _logger.LogError(logEx, "[MR] [DEBUG] [MULTI-SEASON-RENAME-ENTRY] ERROR logging: {Error}", logEx.Message);
+                }
+            }
+            // #endregion
 
             currentPath = overridePath ?? episode.Path;
             if (!string.IsNullOrWhiteSpace(overridePath))
@@ -434,12 +471,74 @@ public class PathRenameService
             _logger.LogInformation("[MR] === Attempting Actual Rename ===");
             _logger.LogInformation("[MR] From: {From}", currentPath);
             _logger.LogInformation("[MR] To: {To}", newFullPath);
+            _logger.LogInformation("[MR] Season2Plus: {IsSeason2Plus}", isSeason2Plus);
+            
+            // #region agent log - MULTI-SEASON-RENAME-ATTEMPT: Track Season 2+ rename attempt
+            if (isSeason2Plus)
+            {
+                try
+                {
+                    var logData = new {
+                        runId = "run1",
+                        hypothesisId = "MULTI-SEASON-RENAME-ATTEMPT",
+                        location = "PathRenameService.cs:438",
+                        message = "About to rename Season 2+ episode file",
+                        data = new {
+                            episodeId = episode.Id.ToString(),
+                            episodeName = episode.Name ?? "NULL",
+                            seasonNumber = seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                            episodeNumber = episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                            fromPath = currentPath,
+                            toPath = newFullPath,
+                            dryRun = dryRun
+                        },
+                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                    };
+                    var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                    try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+                }
+                catch (Exception logEx)
+                {
+                    _logger.LogError(logEx, "[MR] [DEBUG] [MULTI-SEASON-RENAME-ATTEMPT] ERROR logging: {Error}", logEx.Message);
+                }
+            }
+            // #endregion
             
             File.Move(currentPath, newFullPath);
             
             _logger.LogInformation("[MR] ✓✓✓ SUCCESS: Episode file renamed successfully!");
             _logger.LogInformation("[MR] Old: {From}", currentPath);
             _logger.LogInformation("[MR] New: {To}", newFullPath);
+            
+            // #region agent log - MULTI-SEASON-RENAME-SUCCESS: Track successful Season 2+ rename
+            if (isSeason2Plus)
+            {
+                try
+                {
+                    var logData = new {
+                        runId = "run1",
+                        hypothesisId = "MULTI-SEASON-RENAME-SUCCESS",
+                        location = "PathRenameService.cs:440",
+                        message = "Season 2+ episode file renamed successfully",
+                        data = new {
+                            episodeId = episode.Id.ToString(),
+                            episodeName = episode.Name ?? "NULL",
+                            seasonNumber = seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                            episodeNumber = episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                            fromPath = currentPath,
+                            toPath = newFullPath
+                        },
+                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                    };
+                    var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                    try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+                }
+                catch (Exception logEx)
+                {
+                    _logger.LogError(logEx, "[MR] [DEBUG] [MULTI-SEASON-RENAME-SUCCESS] ERROR logging: {Error}", logEx.Message);
+                }
+            }
+            // #endregion
             
             // Verify the rename
             if (File.Exists(newFullPath))
@@ -453,20 +552,140 @@ public class PathRenameService
         }
         catch (UnauthorizedAccessException ex)
         {
-            _logger.LogError(ex, "[MR] ERROR: UnauthorizedAccessException - Permission denied. From: {From}, To: {To}", currentPath, newFullPath);
+            var seasonNumber = episode.ParentIndexNumber;
+            var isSeason2Plus = seasonNumber.HasValue && seasonNumber.Value >= 2;
+            _logger.LogError(ex, "[MR] ERROR: UnauthorizedAccessException - Permission denied. From: {From}, To: {To} (Season2Plus={IsSeason2Plus})", 
+                currentPath, newFullPath, isSeason2Plus);
+            // #region agent log - MULTI-SEASON-RENAME-ERROR: Track Season 2+ rename errors
+            if (isSeason2Plus)
+            {
+                try
+                {
+                    var logData = new {
+                        runId = "run1",
+                        hypothesisId = "MULTI-SEASON-RENAME-ERROR",
+                        location = "PathRenameService.cs:454",
+                        message = "UnauthorizedAccessException during Season 2+ episode rename",
+                        data = new {
+                            episodeId = episode.Id.ToString(),
+                            episodeName = episode.Name ?? "NULL",
+                            seasonNumber = seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                            exceptionType = ex.GetType().FullName,
+                            exceptionMessage = ex.Message,
+                            fromPath = currentPath,
+                            toPath = newFullPath
+                        },
+                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                    };
+                    var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                    try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+                }
+                catch { }
+            }
+            // #endregion
         }
         catch (FileNotFoundException ex)
         {
-            _logger.LogError(ex, "[MR] ERROR: FileNotFoundException - Source file not found. Path: {Path}", currentPath);
+            var seasonNumber = episode.ParentIndexNumber;
+            var isSeason2Plus = seasonNumber.HasValue && seasonNumber.Value >= 2;
+            _logger.LogError(ex, "[MR] ERROR: FileNotFoundException - Source file not found. Path: {Path} (Season2Plus={IsSeason2Plus})", 
+                currentPath, isSeason2Plus);
+            // #region agent log - MULTI-SEASON-RENAME-ERROR: Track Season 2+ rename errors
+            if (isSeason2Plus)
+            {
+                try
+                {
+                    var logData = new {
+                        runId = "run1",
+                        hypothesisId = "MULTI-SEASON-RENAME-ERROR",
+                        location = "PathRenameService.cs:459",
+                        message = "FileNotFoundException during Season 2+ episode rename",
+                        data = new {
+                            episodeId = episode.Id.ToString(),
+                            episodeName = episode.Name ?? "NULL",
+                            seasonNumber = seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                            exceptionType = ex.GetType().FullName,
+                            exceptionMessage = ex.Message,
+                            path = currentPath
+                        },
+                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                    };
+                    var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                    try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+                }
+                catch { }
+            }
+            // #endregion
         }
         catch (IOException ex)
         {
-            _logger.LogError(ex, "[MR] ERROR: IOException - File system error. From: {From}, To: {To}, Message: {Message}", currentPath, newFullPath, ex.Message);
+            var seasonNumber = episode.ParentIndexNumber;
+            var isSeason2Plus = seasonNumber.HasValue && seasonNumber.Value >= 2;
+            _logger.LogError(ex, "[MR] ERROR: IOException - File system error. From: {From}, To: {To}, Message: {Message} (Season2Plus={IsSeason2Plus})", 
+                currentPath, newFullPath, ex.Message, isSeason2Plus);
+            // #region agent log - MULTI-SEASON-RENAME-ERROR: Track Season 2+ rename errors
+            if (isSeason2Plus)
+            {
+                try
+                {
+                    var logData = new {
+                        runId = "run1",
+                        hypothesisId = "MULTI-SEASON-RENAME-ERROR",
+                        location = "PathRenameService.cs:464",
+                        message = "IOException during Season 2+ episode rename",
+                        data = new {
+                            episodeId = episode.Id.ToString(),
+                            episodeName = episode.Name ?? "NULL",
+                            seasonNumber = seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                            exceptionType = ex.GetType().FullName,
+                            exceptionMessage = ex.Message,
+                            fromPath = currentPath,
+                            toPath = newFullPath
+                        },
+                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                    };
+                    var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                    try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+                }
+                catch { }
+            }
+            // #endregion
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "[MR] ERROR: Unexpected exception during rename. Type: {Type}, Message: {Message}", ex.GetType().Name, ex.Message);
+            var seasonNumber = episode.ParentIndexNumber;
+            var isSeason2Plus = seasonNumber.HasValue && seasonNumber.Value >= 2;
+            _logger.LogError(ex, "[MR] ERROR: Unexpected exception during rename. Type: {Type}, Message: {Message} (Season2Plus={IsSeason2Plus})", 
+                ex.GetType().Name, ex.Message, isSeason2Plus);
             _logger.LogError("[MR] Stack Trace: {StackTrace}", ex.StackTrace ?? "N/A");
+            // #region agent log - MULTI-SEASON-RENAME-ERROR: Track Season 2+ rename errors
+            if (isSeason2Plus)
+            {
+                try
+                {
+                    var logData = new {
+                        runId = "run1",
+                        hypothesisId = "MULTI-SEASON-RENAME-ERROR",
+                        location = "PathRenameService.cs:466",
+                        message = "Unexpected exception during Season 2+ episode rename",
+                        data = new {
+                            episodeId = episode.Id.ToString(),
+                            episodeName = episode.Name ?? "NULL",
+                            seasonNumber = seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                            exceptionType = ex.GetType().FullName,
+                            exceptionMessage = ex.Message,
+                            stackTrace = ex.StackTrace ?? "N/A",
+                            fromPath = currentPath,
+                            toPath = newFullPath
+                        },
+                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                    };
+                    var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                    try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+                }
+                catch { }
+            }
+            // #endregion
         }
     }
 

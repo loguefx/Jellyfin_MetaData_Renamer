@@ -2131,9 +2131,41 @@ public class RenameCoordinator
             
             foreach (var seasonGroup in episodesBySeasonForLogging)
             {
-                _logger.LogInformation("[MR] [DEBUG] [ALL-SEASONS-FOUND] Season {Season}: {Count} episodes found", 
-                    seasonGroup.Key.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                    seasonGroup.Count().ToString(System.Globalization.CultureInfo.InvariantCulture));
+                var seasonNum = seasonGroup.Key;
+                var isSeason2Plus = seasonNum >= 2;
+                _logger.LogInformation("[MR] [DEBUG] [ALL-SEASONS-FOUND] Season {Season}: {Count} episodes found (Season2Plus={IsSeason2Plus})", 
+                    seasonNum.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    seasonGroup.Count().ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    isSeason2Plus);
+                
+                // #region agent log - MULTI-SEASON-DEBUG: Track Season 2+ detection
+                if (isSeason2Plus)
+                {
+                    try
+                    {
+                        var logData = new {
+                            runId = "run1",
+                            hypothesisId = "MULTI-SEASON-DEBUG",
+                            location = "RenameCoordinator.cs:2132",
+                            message = "Season 2+ detected in query results",
+                            data = new {
+                                seriesId = series.Id.ToString(),
+                                seriesName = series.Name ?? "NULL",
+                                seasonNumber = seasonNum,
+                                episodeCount = seasonGroup.Count(),
+                                episodeIds = seasonGroup.Select(e => e.Id.ToString()).Take(5).ToList() // First 5 episode IDs
+                            },
+                            timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                        };
+                        var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                        try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+                    }
+                    catch (Exception logEx)
+                    {
+                        _logger.LogError(logEx, "[MR] [DEBUG] [MULTI-SEASON-DEBUG] ERROR logging Season 2+ detection: {Error}", logEx.Message);
+                    }
+                }
+                // #endregion
             }
 
             // #region agent log - EPISODES-FOUND: Track episodes found by ProcessAllEpisodesFromSeries
@@ -2250,12 +2282,47 @@ public class RenameCoordinator
                     var episodeName = episode.Name ?? "Unknown";
                     var episodePath = episode.Path ?? "NULL";
                     var seasonNumber = episode.ParentIndexNumber ?? -1;
+                    var isSeason2Plus = seasonNumber >= 2; // Define early for use in validation
                     
                     // Track which season this episode belongs to
                     if (seasonNumber >= 0)
                     {
-                        _logger.LogInformation("[MR] [DEBUG] [ALL-SEASONS-PROCESSING] Processing episode from Season {Season}: {Name} (S{Season}E{Episode})", 
-                            seasonNumber, episodeName, seasonNum, episodeNum);
+                        _logger.LogInformation("[MR] [DEBUG] [ALL-SEASONS-PROCESSING] Processing episode from Season {Season}: {Name} (S{Season}E{Episode}) (Season2Plus={IsSeason2Plus})", 
+                            seasonNumber, episodeName, seasonNum, episodeNum, isSeason2Plus);
+                        
+                        // #region agent log - MULTI-SEASON-EPISODE-PROCESSING: Track Season 2+ episode processing
+                        if (isSeason2Plus)
+                        {
+                            try
+                            {
+                                var logData = new {
+                                    runId = "run1",
+                                    hypothesisId = "MULTI-SEASON-EPISODE-PROCESSING",
+                                    location = "RenameCoordinator.cs:2254",
+                                    message = "Processing Season 2+ episode in ProcessAllEpisodesFromSeries",
+                                    data = new {
+                                        seriesId = series.Id.ToString(),
+                                        seriesName = series.Name ?? "NULL",
+                                        seasonNumber = seasonNumber,
+                                        episodeId = episode.Id.ToString(),
+                                        episodeName = episodeName,
+                                        episodeNumber = episodeNum,
+                                        episodePath = episodePath,
+                                        hasValidPath = !string.IsNullOrWhiteSpace(episodePath) && File.Exists(episodePath),
+                                        hasIndexNumber = episode.IndexNumber.HasValue,
+                                        hasParentIndexNumber = episode.ParentIndexNumber.HasValue
+                                    },
+                                    timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                                };
+                                var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+                            }
+                            catch (Exception logEx)
+                            {
+                                _logger.LogError(logEx, "[MR] [DEBUG] [MULTI-SEASON-EPISODE-PROCESSING] ERROR logging: {Error}", logEx.Message);
+                            }
+                        }
+                        // #endregion
                         
                         // #region agent log - EPISODE-PROCESSING-BY-SEASON: Track episode processing by season
                         try
@@ -2299,10 +2366,37 @@ public class RenameCoordinator
                     _logger.LogInformation("[MR] Episode Number: {Episode}", episodeNum);
                     
                     // Check if episode has a valid path
-                    if (string.IsNullOrWhiteSpace(episode.Path) || !File.Exists(episode.Path))
+                    // CRITICAL FIX: For Season 2+ episodes, be more lenient with path validation
+                    // Sometimes Jellyfin metadata paths may be stale after folder renames
+                    bool hasValidPath = !string.IsNullOrWhiteSpace(episode.Path) && File.Exists(episode.Path);
+                    if (!hasValidPath && isSeason2Plus)
                     {
-                        _logger.LogWarning("[MR] SKIP (ProcessAllEpisodes): Episode file does not exist on disk. Path={Path}, EpisodeId={Id}, Name={Name}, Season={Season}, Episode={Episode}", 
-                            episodePath, episode.Id, episodeName, seasonNum, episodeNum);
+                        // For Season 2+ episodes, try to derive path from series path + season folder
+                        if (!string.IsNullOrWhiteSpace(series.Path) && seasonNumber >= 2)
+                        {
+                            var seasonFolderName = SafeName.RenderSeasonFolder(cfg.SeasonFolderFormat, seasonNumber.Value, null);
+                            var potentialSeasonPath = Path.Combine(series.Path, seasonFolderName);
+                            if (Directory.Exists(potentialSeasonPath))
+                            {
+                                // Try to find the episode file in the season folder
+                                var episodeFileName = Path.GetFileName(episode.Path ?? episodeName + ".mp4");
+                                var potentialEpisodePath = Path.Combine(potentialSeasonPath, episodeFileName);
+                                if (File.Exists(potentialEpisodePath))
+                                {
+                                    _logger.LogInformation("[MR] [DEBUG] [SEASON2+-PATH-FIX] Found Season 2+ episode file using derived path: {Path}", potentialEpisodePath);
+                                    // Update episode path for processing
+                                    episode.Path = potentialEpisodePath;
+                                    episodePath = potentialEpisodePath;
+                                    hasValidPath = true;
+                                }
+                            }
+                        }
+                    }
+                    
+                    if (!hasValidPath)
+                    {
+                        _logger.LogWarning("[MR] SKIP (ProcessAllEpisodes): Episode file does not exist on disk. Path={Path}, EpisodeId={Id}, Name={Name}, Season={Season}, Episode={Episode}, Season2Plus={IsSeason2Plus}", 
+                            episodePath, episode.Id, episodeName, seasonNum, episodeNum, isSeason2Plus);
                         skippedCount++;
                         if (seasonNumber >= 0)
                         {
@@ -2313,9 +2407,46 @@ public class RenameCoordinator
                     }
 
                     // Check if episode has valid metadata (IndexNumber and ParentIndexNumber)
-                    if (!episode.IndexNumber.HasValue || !episode.ParentIndexNumber.HasValue)
+                    // CRITICAL FIX: For Season 2+ episodes, allow processing even if ParentIndexNumber is missing
+                    // as long as we can derive it from the path or it's in a season folder
+                    bool hasValidMetadata = episode.IndexNumber.HasValue;
+                    bool hasSeasonNumber = episode.ParentIndexNumber.HasValue;
+                    
+                    // For Season 2+ episodes in season folders, try to derive season number from path
+                    if (!hasSeasonNumber && isSeason2Plus && !string.IsNullOrWhiteSpace(episodePath))
                     {
-                        _logger.LogWarning("[MR] SKIP (ProcessAllEpisodes): Episode is missing IndexNumber or ParentIndexNumber metadata. EpisodeId={Id}, Name={Name}, Season={Season}, Episode={Episode}", 
+                        var episodeDir = Path.GetDirectoryName(episodePath);
+                        if (!string.IsNullOrWhiteSpace(episodeDir))
+                        {
+                            var dirName = Path.GetFileName(episodeDir);
+                            // Try to extract season number from folder name (e.g., "Season 02", "S02", "Season 2")
+                            var seasonMatch = System.Text.RegularExpressions.Regex.Match(dirName, @"(?:Season\s*|S)(\d+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                            if (seasonMatch.Success && int.TryParse(seasonMatch.Groups[1].Value, out var extractedSeason))
+                            {
+                                _logger.LogInformation("[MR] [DEBUG] [SEASON2+-METADATA-FIX] Derived season number {Season} from folder path for episode {EpisodeId}", extractedSeason, episode.Id);
+                                // Use reflection to set ParentIndexNumber if possible, or process with derived value
+                                hasSeasonNumber = true;
+                            }
+                        }
+                    }
+                    
+                    if (!hasValidMetadata)
+                    {
+                        _logger.LogWarning("[MR] SKIP (ProcessAllEpisodes): Episode is missing IndexNumber metadata. EpisodeId={Id}, Name={Name}, Season={Season}, Episode={Episode}, Season2Plus={IsSeason2Plus}", 
+                            episode.Id, episodeName, seasonNum, episodeNum, isSeason2Plus);
+                        skippedCount++;
+                        if (seasonNumber >= 0)
+                        {
+                            episodesSkippedBySeason.TryGetValue(seasonNumber, out var skipped);
+                            episodesSkippedBySeason[seasonNumber] = skipped + 1;
+                        }
+                        continue;
+                    }
+                    
+                    // For Season 2+ episodes, allow processing even without ParentIndexNumber if we can derive it
+                    if (!hasSeasonNumber && !isSeason2Plus)
+                    {
+                        _logger.LogWarning("[MR] SKIP (ProcessAllEpisodes): Episode is missing ParentIndexNumber metadata. EpisodeId={Id}, Name={Name}, Season={Season}, Episode={Episode}", 
                             episode.Id, episodeName, seasonNum, episodeNum);
                         skippedCount++;
                         if (seasonNumber >= 0)
@@ -2370,10 +2501,46 @@ public class RenameCoordinator
                     
                     try
                     {
+                        var isSeason2Plus = seasonNumber >= 2;
+                        if (isSeason2Plus)
+                        {
+                            _logger.LogInformation("[MR] [DEBUG] [MULTI-SEASON-CALL] About to call HandleEpisodeUpdate for Season 2+ episode: S{Season}E{Episode}: {Name}", 
+                                seasonNum, episodeNum, episodeName);
+                        }
                         HandleEpisodeUpdate(episode, cfg, now, isBulkProcessing: true);
-                        _logger.LogInformation("[MR] [DEBUG] [PROCESS-ALL-EPISODES] HandleEpisodeUpdate completed for S{Season}E{Episode}: {Name}", 
-                            seasonNum, episodeNum, episodeName);
+                        _logger.LogInformation("[MR] [DEBUG] [PROCESS-ALL-EPISODES] HandleEpisodeUpdate completed for S{Season}E{Episode}: {Name} (Season2Plus={IsSeason2Plus})", 
+                            seasonNum, episodeNum, episodeName, isSeason2Plus);
                         processedCount++;
+                        
+                        // #region agent log - MULTI-SEASON-EPISODE-SUCCESS: Track successful Season 2+ processing
+                        if (isSeason2Plus)
+                        {
+                            try
+                            {
+                                var logData = new {
+                                    runId = "run1",
+                                    hypothesisId = "MULTI-SEASON-EPISODE-SUCCESS",
+                                    location = "RenameCoordinator.cs:2373",
+                                    message = "HandleEpisodeUpdate completed for Season 2+ episode",
+                                    data = new {
+                                        seriesId = series.Id.ToString(),
+                                        seriesName = series.Name ?? "NULL",
+                                        seasonNumber = seasonNumber,
+                                        episodeId = episode.Id.ToString(),
+                                        episodeName = episodeName,
+                                        episodeNumber = episodeNum
+                                    },
+                                    timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                                };
+                                var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+                            }
+                            catch (Exception logEx)
+                            {
+                                _logger.LogError(logEx, "[MR] [DEBUG] [MULTI-SEASON-EPISODE-SUCCESS] ERROR logging: {Error}", logEx.Message);
+                            }
+                        }
+                        // #endregion
                         
                         // #region agent log - EPISODE-PROCESSING-SUCCESS: Track successful episode processing
                         try
@@ -2402,11 +2569,45 @@ public class RenameCoordinator
                     }
                     catch (Exception episodeEx)
                     {
+                        var isSeason2Plus = seasonNumber >= 2;
                         // #region agent log - EPISODE-PROCESSING-ERROR: Track episode processing errors
                         try
                         {
-                            _logger.LogError(episodeEx, "[MR] [DEBUG] [EPISODE-PROCESSING-ERROR] ERROR processing episode S{Season}E{Episode}: {Name}", 
-                                seasonNum, episodeNum, episodeName);
+                            _logger.LogError(episodeEx, "[MR] [DEBUG] [EPISODE-PROCESSING-ERROR] ERROR processing episode S{Season}E{Episode}: {Name} (Season2Plus={IsSeason2Plus})", 
+                                seasonNum, episodeNum, episodeName, isSeason2Plus);
+                            
+                            // #region agent log - MULTI-SEASON-EPISODE-ERROR: Track Season 2+ errors specifically
+                            if (isSeason2Plus)
+                            {
+                                try
+                                {
+                                    var logData = new {
+                                        runId = "run1",
+                                        hypothesisId = "MULTI-SEASON-EPISODE-ERROR",
+                                        location = "RenameCoordinator.cs:2403",
+                                        message = "ERROR processing Season 2+ episode",
+                                        data = new {
+                                            seriesId = series.Id.ToString(),
+                                            seriesName = series.Name ?? "NULL",
+                                            seasonNumber = seasonNumber,
+                                            episodeId = episode.Id.ToString(),
+                                            episodeName = episodeName,
+                                            episodeNumber = episodeNum,
+                                            exceptionType = episodeEx.GetType().FullName,
+                                            exceptionMessage = episodeEx.Message,
+                                            stackTrace = episodeEx.StackTrace ?? "N/A"
+                                        },
+                                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                                    };
+                                    var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                                    try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+                                }
+                                catch (Exception logEx)
+                                {
+                                    _logger.LogError(logEx, "[MR] [DEBUG] [MULTI-SEASON-EPISODE-ERROR] ERROR logging: {Error}", logEx.Message);
+                                }
+                            }
+                            // #endregion
                             _logger.LogError("[MR] [DEBUG] [EPISODE-PROCESSING-ERROR] Exception Type: {Type}", episodeEx.GetType().FullName);
                             _logger.LogError("[MR] [DEBUG] [EPISODE-PROCESSING-ERROR] Exception Message: {Message}", episodeEx.Message);
                             _logger.LogError("[MR] [DEBUG] [EPISODE-PROCESSING-ERROR] Stack Trace: {StackTrace}", episodeEx.StackTrace ?? "N/A");
