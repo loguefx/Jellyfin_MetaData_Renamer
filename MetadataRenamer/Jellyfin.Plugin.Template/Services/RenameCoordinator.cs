@@ -3633,12 +3633,66 @@ public class RenameCoordinator
                 var staleSeasonFolderName = Path.GetFileName(path);
                 _logger.LogInformation("[MR] [DEBUG] [SEASON-PATH-STALE] Extracted season folder name from stale path: {FolderName}", staleSeasonFolderName);
                 
-                // Get current series path (should be updated after rename)
-                var seriesPath = season.Series?.Path;
+                // Try to get current series path from file system (more reliable than metadata which may be stale)
+                // First try metadata path, but if it doesn't exist, derive from stale path's parent directory
+                var seriesPathFromMetadata = season.Series?.Path;
+                var seriesPath = seriesPathFromMetadata;
+                
+                // If metadata series path doesn't exist, try to derive it from the stale season path
+                if (string.IsNullOrWhiteSpace(seriesPath) || !Directory.Exists(seriesPath))
+                {
+                    _logger.LogWarning("[MR] [DEBUG] [SEASON-PATH-STALE] Series path from metadata is also stale or null. Attempting to derive from stale season path...");
+                    _logger.LogWarning("[MR] [DEBUG] [SEASON-PATH-STALE] Metadata series path: {MetadataPath}", seriesPathFromMetadata ?? "NULL");
+                    
+                    // Extract parent directory from stale season path (this is the OLD series path)
+                    var staleSeriesPath = Path.GetDirectoryName(path);
+                    if (!string.IsNullOrWhiteSpace(staleSeriesPath))
+                    {
+                        _logger.LogInformation("[MR] [DEBUG] [SEASON-PATH-STALE] Stale series path from season path: {StaleSeriesPath}", staleSeriesPath);
+                        
+                        // Get the parent directory of the stale series path (the library root)
+                        var libraryRoot = Path.GetDirectoryName(staleSeriesPath);
+                        if (!string.IsNullOrWhiteSpace(libraryRoot))
+                        {
+                            _logger.LogInformation("[MR] [DEBUG] [SEASON-PATH-STALE] Library root: {LibraryRoot}", libraryRoot);
+                            
+                            // Search for the series folder in the library root (look for folders matching the series name pattern)
+                            // This is a fallback - we'll try to find the renamed series folder
+                            try
+                            {
+                                var seriesName = season.Series?.Name;
+                                if (!string.IsNullOrWhiteSpace(seriesName))
+                                {
+                                    // Look for folders starting with the series name
+                                    var potentialSeriesFolders = Directory.GetDirectories(libraryRoot, $"{seriesName}*", SearchOption.TopDirectoryOnly);
+                                    if (potentialSeriesFolders.Length > 0)
+                                    {
+                                        // Use the first match (should be the renamed folder)
+                                        seriesPath = potentialSeriesFolders[0];
+                                        _logger.LogWarning("[MR] [DEBUG] [SEASON-PATH-STALE] Found potential series folder by name search: {FoundPath}", seriesPath);
+                                    }
+                                }
+                            }
+                            catch (Exception searchEx)
+                            {
+                                _logger.LogWarning(searchEx, "[MR] [DEBUG] [SEASON-PATH-STALE] Error searching for series folder: {Error}", searchEx.Message);
+                            }
+                        }
+                    }
+                }
+                
                 if (string.IsNullOrWhiteSpace(seriesPath))
                 {
-                    _logger.LogWarning("[MR] [DEBUG] [SEASON-SKIP-PATH-NOT-EXISTS] SKIP: Season path does not exist and cannot derive from series (series path is null). Path={Path}, SeasonId={Id}, Name={Name}, SeasonNumber={SeasonNumber}", 
+                    _logger.LogWarning("[MR] [DEBUG] [SEASON-SKIP-PATH-NOT-EXISTS] SKIP: Season path does not exist and cannot derive from series (series path is null or not found). Path={Path}, SeasonId={Id}, Name={Name}, SeasonNumber={SeasonNumber}", 
                         path, season.Id, season.Name ?? "NULL", season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+                    return;
+                }
+                
+                // Verify the series path exists
+                if (!Directory.Exists(seriesPath))
+                {
+                    _logger.LogWarning("[MR] [DEBUG] [SEASON-SKIP-PATH-NOT-EXISTS] SKIP: Derived series path does not exist. SeriesPath={SeriesPath}, SeasonId={Id}, Name={Name}, SeasonNumber={SeasonNumber}", 
+                        seriesPath, season.Id, season.Name ?? "NULL", season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
                     return;
                 }
                 
