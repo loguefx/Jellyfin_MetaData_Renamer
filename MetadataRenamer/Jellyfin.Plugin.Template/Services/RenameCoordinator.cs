@@ -4195,11 +4195,56 @@ public class RenameCoordinator
             }
             
             // Check if episode is directly in series folder (no season folder)
-            var isInSeriesRoot = !string.IsNullOrWhiteSpace(seriesPath) && 
-                                 !string.IsNullOrWhiteSpace(episodeDirectory) &&
-                                 string.Equals(episodeDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), 
-                                             seriesPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), 
-                                             StringComparison.OrdinalIgnoreCase);
+            // CRITICAL: We must verify that episodeDirectory is NOT a season folder before checking if it equals seriesPath
+            // This prevents creating Season 1 folders inside other season folders
+            var isInSeriesRoot = false;
+            if (!string.IsNullOrWhiteSpace(seriesPath) && !string.IsNullOrWhiteSpace(episodeDirectory))
+            {
+                var normalizedEpisodeDir = episodeDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                var normalizedSeriesPath = seriesPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                
+                // First check: Do the paths match?
+                var pathsMatch = string.Equals(normalizedEpisodeDir, normalizedSeriesPath, StringComparison.OrdinalIgnoreCase);
+                
+                if (pathsMatch)
+                {
+                    // Paths match, but we need to verify episodeDirectory is NOT a season folder
+                    // (This prevents the bug where seriesPath incorrectly points to a season folder)
+                    var episodeDirName = Path.GetFileName(normalizedEpisodeDir);
+                    if (!string.IsNullOrWhiteSpace(episodeDirName))
+                    {
+                        // Check if the directory name matches season folder patterns
+                        var seasonPattern = new System.Text.RegularExpressions.Regex(
+                            @"^(Season\s*\d+|S\d+|Season\s*\d{2,})$",
+                            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                        
+                        var isSeasonFolder = seasonPattern.IsMatch(episodeDirName);
+                        
+                        if (isSeasonFolder)
+                        {
+                            // episodeDirectory is a season folder, so episode is NOT in series root
+                            // This means seriesPath was incorrectly derived (pointing to season folder instead of series folder)
+                            _logger.LogWarning("[MR] [DEBUG] [SEASON-FOLDER-BUG-PREVENTION] Detected episode in season folder '{SeasonFolder}' but seriesPath incorrectly points to same folder. Skipping Season 1 folder creation to prevent nested structure.", episodeDirName);
+                            isInSeriesRoot = false;
+                        }
+                        else
+                        {
+                            // episodeDirectory is NOT a season folder and paths match, so episode is in series root
+                            isInSeriesRoot = true;
+                        }
+                    }
+                    else
+                    {
+                        // Can't determine directory name, assume paths match means series root
+                        isInSeriesRoot = true;
+                    }
+                }
+                else
+                {
+                    // Paths don't match, episode is definitely in a season folder (or somewhere else)
+                    isInSeriesRoot = false;
+                }
+            }
             
             // #region agent log - MULTI-EPISODE-HYP-F: Track isInSeriesRoot detection for each episode
             try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "MULTI-EP-F", location = "RenameCoordinator.cs:557", message = "isInSeriesRoot check", data = new { episodeId = episode.Id.ToString(), episodeName = episode.Name ?? "NULL", episodePath = path, episodeDirectory = episodeDirectory ?? "NULL", seriesPath = seriesPath ?? "NULL", isInSeriesRoot = isInSeriesRoot }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
@@ -4208,7 +4253,17 @@ public class RenameCoordinator
             // Remember if we were in series root BEFORE moving (capture before isInSeriesRoot is modified)
             var wasInSeriesRootBeforeMove = isInSeriesRoot;
             
-            if (isInSeriesRoot)
+            // CRITICAL FIX: Never create Season 1 folder for episodes that are in Season 2+ according to metadata
+            // This prevents creating nested "Season 01" folders inside other season folders (e.g., Season 21/Season 01)
+            // Note: isSeason2Plus is already defined earlier in the method (line 4040)
+            
+            if (isInSeriesRoot && isSeason2Plus)
+            {
+                _logger.LogWarning("[MR] [DEBUG] [SEASON-FOLDER-BUG-PREVENTION] SKIP: Episode is in series root but has Season {Season} metadata. Skipping Season 1 folder creation to prevent nested structure. Episode: {Name}, Path: {Path}", 
+                    episode.ParentIndexNumber ?? -1, episode.Name ?? "NULL", path);
+            }
+            
+            if (isInSeriesRoot && !isSeason2Plus)
             {
                 _logger.LogInformation("[MR] Episode is directly in series folder (no season folder structure)");
                 
