@@ -4338,16 +4338,27 @@ public class RenameCoordinator
             var episodeTitle = ExtractCleanEpisodeTitle(episode);
             
             // Determine season number:
-            // - If episode was in series root (flat structure), we created Season 1 folder, so use season 1
-            // - If episode is already in a season folder, use the actual season number from metadata
+            // - ALWAYS use metadata season number if available (most reliable)
+            // - Only use Season 1 if episode was actually in series root AND metadata doesn't indicate Season 2+
             // - Default to 1 if season number is null
             int? seasonNumber = episode.ParentIndexNumber;
             
-            if (wasInSeriesRootBeforeMove)
+            // CRITICAL FIX: Never override metadata season number for Season 2+ episodes
+            // This prevents generating incorrect filenames like "S01E575" when episode is actually Season 10
+            if (wasInSeriesRootBeforeMove && !isSeason2Plus)
             {
                 // Episode was in series root (flat structure) and we moved it to Season 1
+                // Only use Season 1 if metadata doesn't indicate Season 2+
                 seasonNumber = 1;
                 _logger.LogInformation("[MR] Episode was in series root (flat structure). Using Season 1 for renaming after moving to Season 1 folder.");
+            }
+            else if (wasInSeriesRootBeforeMove && isSeason2Plus)
+            {
+                // Episode was incorrectly detected as being in series root, but metadata says Season 2+
+                // Use metadata season number (don't override with Season 1)
+                _logger.LogWarning("[MR] [DEBUG] [SEASON-NUMBER-FIX] Episode was incorrectly detected as in series root, but metadata indicates Season {Season}. Using metadata season number instead of Season 1.", 
+                    seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+                // seasonNumber already set from episode.ParentIndexNumber above - don't override
             }
             else if (seasonNumber == null)
             {

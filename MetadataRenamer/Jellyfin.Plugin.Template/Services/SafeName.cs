@@ -365,9 +365,15 @@ public static class SafeName
             title = paddedPattern.Replace(title, string.Empty);
         }
 
-        // Remove generic S##E## - pattern (without specific numbers)
+        // Remove generic S##E## - pattern (without specific numbers) from beginning
         var genericPattern = new Regex(@"^[Ss]\d+[Ee]\d+\s*-\s*", RegexOptions.IgnoreCase);
         title = genericPattern.Replace(title, string.Empty);
+
+        // CRITICAL FIX: Remove embedded S##E## patterns (e.g., "One Piece_S10E575_", "SeriesName_S01E05")
+        // These patterns can appear anywhere in the title, not just at the beginning
+        // Pattern: SeriesName_S##E##_ or SeriesName_S##E## or _S##E##_ or _S##E##
+        var embeddedSeasonEpisodePattern = new Regex(@"[_\s]+[Ss]\d+[Ee]\d+[_\s]*", RegexOptions.IgnoreCase);
+        title = embeddedSeasonEpisodePattern.Replace(title, " ");
 
         // Remove series name + "Season X Dub Episode Y" patterns
         // Pattern: "Series Name Season X Dub Episode Y" or similar
