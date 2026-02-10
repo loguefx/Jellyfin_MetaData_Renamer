@@ -1718,21 +1718,32 @@ public class RenameCoordinator
                 // #region agent log - EPISODE-QUERY-RESULT: Track query results
                 try
                 {
+                    // Count seasons and episodes explicitly
+                    var seasonCount = allItems.OfType<Season>().Count();
+                    var episodeCount = allItems.OfType<Episode>().Count();
+                    
                     var logData = new {
                         runId = "run1",
                         hypothesisId = "EPISODE-QUERY-RESULT",
-                        location = "RenameCoordinator.cs:1614",
-                        message = "Episode query result",
+                        location = "RenameCoordinator.cs:1715",
+                        message = "Episode query result - verifying seasons are returned",
                         data = new {
                             seriesId = series.Id.ToString(),
                             seriesName = series.Name ?? "NULL",
                             totalItemsReturned = allItems.Count,
-                            itemTypes = allItems.GroupBy(item => item.GetType().Name).Select(g => new { type = g.Key, count = g.Count() }).ToList()
+                            seasonCount = seasonCount,
+                            episodeCount = episodeCount,
+                            itemTypes = allItems.GroupBy(item => item.GetType().Name).Select(g => new { type = g.Key, count = g.Count() }).ToList(),
+                            seasonsFound = seasonCount > 0,
+                            episodesFound = episodeCount > 0
                         },
                         timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
                     };
                     var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
                     try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+                    
+                    _logger.LogInformation("[MR] [DEBUG] [EPISODE-QUERY-RESULT] Query returned {TotalItems} items: {SeasonCount} seasons, {EpisodeCount} episodes",
+                        allItems.Count, seasonCount, episodeCount);
                 }
                 catch (Exception logEx)
                 {
@@ -1814,8 +1825,62 @@ public class RenameCoordinator
                             _logger.LogInformation("[MR] [DEBUG] [PROCESS-ALL-SEASONS] Processing season folder: Season {SeasonNumber} - {Name} (ID: {Id})",
                                 seasonNum, season.Name ?? "NULL", season.Id);
                             
+                            // #region agent log - PROCESS-SEASON-BEFORE: Track season before processing
+                            try
+                            {
+                                var logData = new {
+                                    runId = "run1",
+                                    hypothesisId = "PROCESS-SEASON-BEFORE",
+                                    location = "RenameCoordinator.cs:1809",
+                                    message = "About to process season folder",
+                                    data = new {
+                                        seasonId = season.Id.ToString(),
+                                        seasonName = season.Name ?? "NULL",
+                                        seasonNumber = seasonNum,
+                                        seasonPath = season.Path ?? "NULL",
+                                        hasPath = !string.IsNullOrWhiteSpace(season.Path),
+                                        pathExists = !string.IsNullOrWhiteSpace(season.Path) && Directory.Exists(season.Path),
+                                        hasIndexNumber = season.IndexNumber.HasValue,
+                                        cooldownActive = _lastAttemptUtcByItem.TryGetValue(season.Id, out var lastTry) && (now - lastTry).TotalSeconds < cfg.PerItemCooldownSeconds
+                                    },
+                                    timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                                };
+                                var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+                            }
+                            catch (Exception logEx)
+                            {
+                                _logger.LogError(logEx, "[MR] [DEBUG] [PROCESS-SEASON-BEFORE] ERROR logging: {Error}", logEx.Message);
+                            }
+                            // #endregion
+                            
                             // Call HandleSeasonUpdate to process the season folder
                             HandleSeasonUpdate(season, cfg, now);
+                            
+                            // #region agent log - PROCESS-SEASON-AFTER: Track season after processing
+                            try
+                            {
+                                var logData = new {
+                                    runId = "run1",
+                                    hypothesisId = "PROCESS-SEASON-AFTER",
+                                    location = "RenameCoordinator.cs:1818",
+                                    message = "Season processing completed (no exception)",
+                                    data = new {
+                                        seasonId = season.Id.ToString(),
+                                        seasonName = season.Name ?? "NULL",
+                                        seasonNumber = seasonNum,
+                                        seasonPath = season.Path ?? "NULL"
+                                    },
+                                    timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                                };
+                                var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+                            }
+                            catch (Exception logEx)
+                            {
+                                _logger.LogError(logEx, "[MR] [DEBUG] [PROCESS-SEASON-AFTER] ERROR logging: {Error}", logEx.Message);
+                            }
+                            // #endregion
                             
                             seasonsProcessed++;
                             _logger.LogInformation("[MR] [DEBUG] [PROCESS-ALL-SEASONS] ✓ Season {SeasonNumber} processed successfully", seasonNum);
@@ -1827,6 +1892,33 @@ public class RenameCoordinator
                             _logger.LogError(seasonEx, "[MR] [DEBUG] [PROCESS-ALL-SEASONS] ERROR processing season {SeasonNumber} (ID: {Id}): {Message}",
                                 seasonNum, season.Id, seasonEx.Message);
                             _logger.LogError("[MR] [DEBUG] [PROCESS-ALL-SEASONS] Stack Trace: {StackTrace}", seasonEx.StackTrace ?? "N/A");
+                            
+                            // #region agent log - PROCESS-SEASON-ERROR: Track season processing errors
+                            try
+                            {
+                                var logData = new {
+                                    runId = "run1",
+                                    hypothesisId = "PROCESS-SEASON-ERROR",
+                                    location = "RenameCoordinator.cs:1823",
+                                    message = "Exception during season processing",
+                                    data = new {
+                                        seasonId = season.Id.ToString(),
+                                        seasonName = season.Name ?? "NULL",
+                                        seasonNumber = seasonNum,
+                                        exceptionType = seasonEx.GetType().FullName,
+                                        exceptionMessage = seasonEx.Message,
+                                        stackTrace = seasonEx.StackTrace ?? "N/A"
+                                    },
+                                    timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                                };
+                                var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+                            }
+                            catch (Exception logEx)
+                            {
+                                _logger.LogError(logEx, "[MR] [DEBUG] [PROCESS-SEASON-ERROR] ERROR logging: {Error}", logEx.Message);
+                            }
+                            // #endregion
                         }
                     }
                     
@@ -2008,6 +2100,35 @@ public class RenameCoordinator
             _logger.LogInformation("[MR] [DEBUG] [ALL-SEASONS-FOUND] === All Seasons Found in Series ===");
             _logger.LogInformation("[MR] [DEBUG] [ALL-SEASONS-FOUND] Series: {Name}, ID: {Id}", series.Name ?? "NULL", series.Id);
             _logger.LogInformation("[MR] [DEBUG] [ALL-SEASONS-FOUND] Total seasons detected: {SeasonCount}", episodesBySeasonForLogging.Count);
+            
+            // #region agent log - ALL-SEASONS-FOUND: Track all seasons with episodes
+            try
+            {
+                var logData = new {
+                    runId = "run1",
+                    hypothesisId = "ALL-SEASONS-FOUND",
+                    location = "RenameCoordinator.cs:2170",
+                    message = "All seasons with episodes detected",
+                    data = new {
+                        seriesId = series.Id.ToString(),
+                        seriesName = series.Name ?? "NULL",
+                        totalSeasonsWithEpisodes = episodesBySeasonForLogging.Count,
+                        seasons = episodesBySeasonForLogging.Select(sg => new {
+                            seasonNumber = sg.Key,
+                            episodeCount = sg.Count()
+                        }).ToList()
+                    },
+                    timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                };
+                var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+            }
+            catch (Exception logEx)
+            {
+                _logger.LogError(logEx, "[MR] [DEBUG] [ALL-SEASONS-FOUND] ERROR logging: {Error}", logEx.Message);
+            }
+            // #endregion
+            
             foreach (var seasonGroup in episodesBySeasonForLogging)
             {
                 _logger.LogInformation("[MR] [DEBUG] [ALL-SEASONS-FOUND] Season {Season}: {Count} episodes found", 
@@ -2135,6 +2256,34 @@ public class RenameCoordinator
                     {
                         _logger.LogInformation("[MR] [DEBUG] [ALL-SEASONS-PROCESSING] Processing episode from Season {Season}: {Name} (S{Season}E{Episode})", 
                             seasonNumber, episodeName, seasonNum, episodeNum);
+                        
+                        // #region agent log - EPISODE-PROCESSING-BY-SEASON: Track episode processing by season
+                        try
+                        {
+                            var logData = new {
+                                runId = "run1",
+                                hypothesisId = "EPISODE-PROCESSING-BY-SEASON",
+                                location = "RenameCoordinator.cs:2244",
+                                message = "Processing episode from specific season",
+                                data = new {
+                                    seriesId = series.Id.ToString(),
+                                    seriesName = series.Name ?? "NULL",
+                                    seasonNumber = seasonNumber,
+                                    episodeId = episode.Id.ToString(),
+                                    episodeName = episodeName,
+                                    episodeNumber = episodeNum,
+                                    episodePath = episodePath
+                                },
+                                timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                            };
+                            var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                            try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+                        }
+                        catch (Exception logEx)
+                        {
+                            _logger.LogError(logEx, "[MR] [DEBUG] [EPISODE-PROCESSING-BY-SEASON] ERROR logging: {Error}", logEx.Message);
+                        }
+                        // #endregion
                     }
                     else
                     {
