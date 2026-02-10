@@ -1575,6 +1575,23 @@ public class RenameCoordinator
 
             _logger.LogInformation("[MR] Found {Count} total episodes in series", allEpisodes.Count);
 
+            // Group episodes by season BEFORE processing to log all seasons found
+            var episodesBySeasonForLogging = allEpisodes
+                .Where(e => e.ParentIndexNumber.HasValue)
+                .GroupBy(e => e.ParentIndexNumber.Value)
+                .OrderBy(g => g.Key)
+                .ToList();
+            
+            _logger.LogInformation("[MR] [DEBUG] [ALL-SEASONS-FOUND] === All Seasons Found in Series ===");
+            _logger.LogInformation("[MR] [DEBUG] [ALL-SEASONS-FOUND] Series: {Name}, ID: {Id}", series.Name ?? "NULL", series.Id);
+            _logger.LogInformation("[MR] [DEBUG] [ALL-SEASONS-FOUND] Total seasons detected: {SeasonCount}", episodesBySeasonForLogging.Count);
+            foreach (var seasonGroup in episodesBySeasonForLogging)
+            {
+                _logger.LogInformation("[MR] [DEBUG] [ALL-SEASONS-FOUND] Season {Season}: {Count} episodes found", 
+                    seasonGroup.Key.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    seasonGroup.Count().ToString(System.Globalization.CultureInfo.InvariantCulture));
+            }
+
             // #region agent log - EPISODES-FOUND: Track episodes found by ProcessAllEpisodesFromSeries
             try
             {
@@ -1671,10 +1688,15 @@ public class RenameCoordinator
                 }
             }
 
-            // Process each episode
+            // Process each episode - track processing by season
             int processedCount = 0;
             int skippedCount = 0;
-            int season2Count = 0;
+            var episodesProcessedBySeason = new Dictionary<int, int>(); // Season number -> count of processed episodes
+            var episodesSkippedBySeason = new Dictionary<int, int>(); // Season number -> count of skipped episodes
+            
+            _logger.LogInformation("[MR] [DEBUG] [ALL-SEASONS-PROCESSING] === Starting episode processing for ALL seasons ===");
+            _logger.LogInformation("[MR] [DEBUG] [ALL-SEASONS-PROCESSING] Total episodes to process: {Total}", allEpisodes.Count);
+            
             foreach (var episode in allEpisodes)
             {
                 try
@@ -1683,13 +1705,18 @@ public class RenameCoordinator
                     var episodeNum = episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL";
                     var episodeName = episode.Name ?? "Unknown";
                     var episodePath = episode.Path ?? "NULL";
+                    var seasonNumber = episode.ParentIndexNumber ?? -1;
                     
-                    // Track Season 2 episodes specifically
-                    if (episode.ParentIndexNumber.HasValue && episode.ParentIndexNumber.Value == 2)
+                    // Track which season this episode belongs to
+                    if (seasonNumber >= 0)
                     {
-                        season2Count++;
-                        _logger.LogInformation("[MR] [DEBUG] [SEASON-2-EPISODE] === Processing Season 2 Episode #{Count}: {Name} (S{Season}E{Episode}) ===", 
-                            season2Count, episodeName, seasonNum, episodeNum);
+                        _logger.LogInformation("[MR] [DEBUG] [ALL-SEASONS-PROCESSING] Processing episode from Season {Season}: {Name} (S{Season}E{Episode})", 
+                            seasonNumber, episodeName, seasonNum, episodeNum);
+                    }
+                    else
+                    {
+                        _logger.LogWarning("[MR] [DEBUG] [ALL-SEASONS-PROCESSING] WARNING: Episode has no season number: {Name} (Episode: {Episode})", 
+                            episodeName, episodeNum);
                     }
                     
                     _logger.LogInformation("[MR] === Processing Episode: {Name} (S{Season}E{Episode}) ===", 
@@ -1705,6 +1732,11 @@ public class RenameCoordinator
                         _logger.LogWarning("[MR] SKIP (ProcessAllEpisodes): Episode file does not exist on disk. Path={Path}, EpisodeId={Id}, Name={Name}, Season={Season}, Episode={Episode}", 
                             episodePath, episode.Id, episodeName, seasonNum, episodeNum);
                         skippedCount++;
+                        if (seasonNumber >= 0)
+                        {
+                            episodesSkippedBySeason.TryGetValue(seasonNumber, out var skipped);
+                            episodesSkippedBySeason[seasonNumber] = skipped + 1;
+                        }
                         continue;
                     }
 
@@ -1714,6 +1746,11 @@ public class RenameCoordinator
                         _logger.LogWarning("[MR] SKIP (ProcessAllEpisodes): Episode is missing IndexNumber or ParentIndexNumber metadata. EpisodeId={Id}, Name={Name}, Season={Season}, Episode={Episode}", 
                             episode.Id, episodeName, seasonNum, episodeNum);
                         skippedCount++;
+                        if (seasonNumber >= 0)
+                        {
+                            episodesSkippedBySeason.TryGetValue(seasonNumber, out var skipped);
+                            episodesSkippedBySeason[seasonNumber] = skipped + 1;
+                        }
                         continue;
                     }
 
@@ -1735,26 +1772,93 @@ public class RenameCoordinator
                         seasonNum, episodeNum, episodeName);
                     processedCount++;
                     
+                    // Track processed episodes by season
+                    if (seasonNumber >= 0)
+                    {
+                        episodesProcessedBySeason.TryGetValue(seasonNumber, out var processed);
+                        episodesProcessedBySeason[seasonNumber] = processed + 1;
+                        _logger.LogInformation("[MR] [DEBUG] [ALL-SEASONS-PROCESSING] Season {Season} progress: {Processed} processed, {Skipped} skipped", 
+                            seasonNumber, 
+                            episodesProcessedBySeason[seasonNumber],
+                            episodesSkippedBySeason.TryGetValue(seasonNumber, out var skipped) ? skipped : 0);
+                    }
+                    
                     _logger.LogInformation("[MR] ✓ Successfully processed episode: {Name} (S{Season}E{Episode})", 
                         episodeName, seasonNum, episodeNum);
                 }
                 catch (Exception ex)
                 {
+                    var errorSeasonNumber = episode.ParentIndexNumber ?? -1;
                     _logger.LogError(ex, "[MR] ERROR processing episode {EpisodeName} (ID: {EpisodeId}, S{Season}E{Episode}) during bulk series update: {Message}", 
                         episode.Name ?? "Unknown", episode.Id, 
                         episode.ParentIndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "??",
                         episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "??",
                         ex.Message);
                     skippedCount++;
+                    if (errorSeasonNumber >= 0)
+                    {
+                        episodesSkippedBySeason.TryGetValue(errorSeasonNumber, out var skipped);
+                        episodesSkippedBySeason[errorSeasonNumber] = skipped + 1;
+                    }
                 }
             }
 
-               _logger.LogInformation("[MR] === Episode Processing Summary ===");
-               _logger.LogInformation("[MR] Total episodes found: {Total}", allEpisodes.Count);
-               _logger.LogInformation("[MR] Successfully processed: {Processed}", processedCount);
-               _logger.LogInformation("[MR] Skipped: {Skipped}", skippedCount);
-               _logger.LogInformation("[MR] Season 2 episodes processed: {Season2Count}", season2Count);
-               _logger.LogInformation("[MR] === All Episodes Processing Complete ===");
+            // #region agent log - ALL-SEASONS-SUMMARY: Track processing summary by season
+            try
+            {
+                _logger.LogInformation("[MR] [DEBUG] [ALL-SEASONS-SUMMARY] === Episode Processing Summary by Season ===");
+                _logger.LogInformation("[MR] [DEBUG] [ALL-SEASONS-SUMMARY] Total episodes found: {Total}", allEpisodes.Count);
+                _logger.LogInformation("[MR] [DEBUG] [ALL-SEASONS-SUMMARY] Total processed: {Processed}", processedCount);
+                _logger.LogInformation("[MR] [DEBUG] [ALL-SEASONS-SUMMARY] Total skipped: {Skipped}", skippedCount);
+                
+                foreach (var seasonGroup in episodesBySeasonForLogging)
+                {
+                    var seasonNum = seasonGroup.Key;
+                    var totalInSeason = seasonGroup.Count();
+                    var processedInSeason = episodesProcessedBySeason.TryGetValue(seasonNum, out var proc) ? proc : 0;
+                    var skippedInSeason = episodesSkippedBySeason.TryGetValue(seasonNum, out var skip) ? skip : 0;
+                    
+                    _logger.LogInformation("[MR] [DEBUG] [ALL-SEASONS-SUMMARY] Season {Season}: {Total} total, {Processed} processed, {Skipped} skipped", 
+                        seasonNum.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                        totalInSeason,
+                        processedInSeason,
+                        skippedInSeason);
+                }
+                
+                var logData = new { 
+                    runId = "run1", 
+                    hypothesisId = "ALL-SEASONS-SUMMARY", 
+                    location = "RenameCoordinator.cs:1805", 
+                    message = "Episode processing summary by season", 
+                    data = new { 
+                        seriesId = series.Id.ToString(),
+                        seriesName = series.Name ?? "NULL",
+                        totalEpisodes = allEpisodes.Count,
+                        totalProcessed = processedCount,
+                        totalSkipped = skippedCount,
+                        seasons = episodesBySeasonForLogging.Select(sg => new {
+                            seasonNumber = sg.Key,
+                            totalEpisodes = sg.Count(),
+                            processed = episodesProcessedBySeason.TryGetValue(sg.Key, out var p) ? p : 0,
+                            skipped = episodesSkippedBySeason.TryGetValue(sg.Key, out var s) ? s : 0
+                        }).ToList()
+                    }, 
+                    timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() 
+                };
+                var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[MR] [DEBUG] [ALL-SEASONS-SUMMARY] ERROR logging summary: {Error}", ex.Message);
+            }
+            // #endregion
+
+            _logger.LogInformation("[MR] === Episode Processing Summary ===");
+            _logger.LogInformation("[MR] Total episodes found: {Total}", allEpisodes.Count);
+            _logger.LogInformation("[MR] Successfully processed: {Processed}", processedCount);
+            _logger.LogInformation("[MR] Skipped: {Skipped}", skippedCount);
+            _logger.LogInformation("[MR] === All Episodes Processing Complete ===");
             
             // #region agent log - PROCESS-ALL-EPISODES-COMPLETE: Track ProcessAllEpisodesFromSeries completion
             try
