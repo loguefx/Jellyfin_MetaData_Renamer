@@ -24,7 +24,7 @@ public class PluginConfiguration : BasePluginConfiguration
         RenameMovieFolders = true;
         RequireProviderIdMatch = true;
         SeriesFolderFormat = "{Name} ({Year}) [{Provider}-{Id}]";
-        SeasonFolderFormat = "Season {Season:00}";
+        SeasonFolderFormat = "Season {Season:00} - {SeasonName}";
         EpisodeFileFormat = "S{Season:00}E{Episode:00} - {Title}";
         MovieFolderFormat = "{Name} ({Year}) [{Provider}-{Id}]";
         PreferredSeriesProviders = new Collection<string> { "Tmdb", "Tvdb", "Imdb" };

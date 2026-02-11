@@ -4267,13 +4267,41 @@ public class RenameCoordinator
             {
                 _logger.LogInformation("[MR] Episode is directly in series folder (no season folder structure)");
                 
+                // Get Season 1 name from metadata if available
+                string? season1NameFromMetadata = null;
+                if (episode.Series != null)
+                {
+                    try
+                    {
+                        // Get all seasons for the series
+                        var seasons = _libraryManager.GetItemList(new MediaBrowser.Controller.Entities.InternalItemsQuery
+                        {
+                            ParentId = episode.Series.Id,
+                            IncludeItemTypes = new[] { Jellyfin.Data.Enums.BaseItemKind.Season },
+                            Recursive = false
+                        }).Cast<MediaBrowser.Controller.Entities.TV.Season>().ToList();
+                        
+                        // Find Season 1
+                        var season1 = seasons.FirstOrDefault(s => s.IndexNumber == 1);
+                        if (season1 != null)
+                        {
+                            season1NameFromMetadata = season1.Name?.Trim();
+                            _logger.LogInformation("[MR] Found Season 1 name from metadata: '{SeasonName}'", season1NameFromMetadata ?? "NULL");
+                        }
+                    }
+                    catch (Exception seasonEx)
+                    {
+                        _logger.LogWarning(seasonEx, "[MR] Could not retrieve Season 1 name from metadata: {Error}", seasonEx.Message);
+                    }
+                }
+                
                 // Create "Season 1" folder and move episode into it
                 // This ensures Jellyfin shows "Season 1" instead of "Season Unknown"
                 _logger.LogInformation("[MR] === Creating Season 1 Folder for Flat Structure ===");
-                _logger.LogInformation("[MR] Season Folder Format: {Format}", cfg.SeasonFolderFormat ?? "Season {Season:00}");
+                _logger.LogInformation("[MR] Season Folder Format: {Format}", cfg.SeasonFolderFormat ?? "Season {Season:00} - {SeasonName}");
                 _logger.LogInformation("[MR] Season Number for folder: 1");
                 
-                var season1FolderName = SafeName.RenderSeasonFolder(cfg.SeasonFolderFormat, 1, null);
+                var season1FolderName = SafeName.RenderSeasonFolder(cfg.SeasonFolderFormat, 1, season1NameFromMetadata);
                 var season1FolderPath = Path.Combine(seriesPath, season1FolderName);
                 
                 _logger.LogInformation("[MR] Season 1 Folder Name (rendered): {FolderName}", season1FolderName);
@@ -4372,6 +4400,116 @@ public class RenameCoordinator
                 _logger.LogInformation("[MR] Episode is already in a season folder. Using season number from metadata: Season {Season}", 
                     seasonNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
             }
+            
+            // CRITICAL: Ensure episode is in the correct season folder based on metadata
+            // This handles cases where episodes are in the wrong season folder (e.g., Season 07 episodes in Season 01 folder)
+            if (seasonNumber.HasValue && !string.IsNullOrWhiteSpace(seriesPath) && Directory.Exists(seriesPath))
+            {
+                // Get season name from metadata
+                string? seasonNameFromMetadata = null;
+                if (episode.Series != null)
+                {
+                    try
+                    {
+                        // Get all seasons for the series
+                        var seasons = _libraryManager.GetItemList(new MediaBrowser.Controller.Entities.InternalItemsQuery
+                        {
+                            ParentId = episode.Series.Id,
+                            IncludeItemTypes = new[] { Jellyfin.Data.Enums.BaseItemKind.Season },
+                            Recursive = false
+                        }).Cast<MediaBrowser.Controller.Entities.TV.Season>().ToList();
+                        
+                        // Find the season matching the episode's season number
+                        var matchingSeason = seasons.FirstOrDefault(s => s.IndexNumber == seasonNumber.Value);
+                        if (matchingSeason != null)
+                        {
+                            seasonNameFromMetadata = matchingSeason.Name?.Trim();
+                            _logger.LogInformation("[MR] Found season name from metadata: Season {Season} = '{SeasonName}'", 
+                                seasonNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture), 
+                                seasonNameFromMetadata ?? "NULL");
+                        }
+                    }
+                    catch (Exception seasonEx)
+                    {
+                        _logger.LogWarning(seasonEx, "[MR] Could not retrieve season name from metadata: {Error}", seasonEx.Message);
+                    }
+                }
+                
+                // Determine the correct season folder name
+                var correctSeasonFolderName = SafeName.RenderSeasonFolder(
+                    cfg.SeasonFolderFormat,
+                    seasonNumber.Value,
+                    seasonNameFromMetadata);
+                var correctSeasonFolderPath = Path.Combine(seriesPath, correctSeasonFolderName);
+                
+                // Check if episode is currently in the correct season folder
+                var currentEpisodeDirectory = Path.GetDirectoryName(path);
+                var isInCorrectSeasonFolder = string.Equals(
+                    currentEpisodeDirectory?.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                    correctSeasonFolderPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                    StringComparison.OrdinalIgnoreCase);
+                
+                if (!isInCorrectSeasonFolder)
+                {
+                    _logger.LogWarning("[MR] [EPISODE-WRONG-SEASON-FOLDER] Episode is in wrong season folder!");
+                    _logger.LogWarning("[MR] [EPISODE-WRONG-SEASON-FOLDER] Current folder: {Current}", currentEpisodeDirectory ?? "NULL");
+                    _logger.LogWarning("[MR] [EPISODE-WRONG-SEASON-FOLDER] Correct folder: {Correct}", correctSeasonFolderPath);
+                    _logger.LogWarning("[MR] [EPISODE-WRONG-SEASON-FOLDER] Episode metadata: Season {Season}, Episode {Episode}", 
+                        seasonNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                        episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+                    
+                    // Create the correct season folder if it doesn't exist
+                    if (!Directory.Exists(correctSeasonFolderPath))
+                    {
+                        if (cfg.DryRun)
+                        {
+                            _logger.LogWarning("[MR] [EPISODE-WRONG-SEASON-FOLDER] DRY RUN: Would create season folder: {Path}", correctSeasonFolderPath);
+                        }
+                        else
+                        {
+                            Directory.CreateDirectory(correctSeasonFolderPath);
+                            _logger.LogInformation("[MR] [EPISODE-WRONG-SEASON-FOLDER] ✓ Created correct season folder: {Path}", correctSeasonFolderPath);
+                        }
+                    }
+                    
+                    // Move episode to correct season folder
+                    var fileName = Path.GetFileName(path);
+                    var newEpisodePath = Path.Combine(correctSeasonFolderPath, fileName);
+                    
+                    if (!File.Exists(newEpisodePath))
+                    {
+                        if (cfg.DryRun)
+                        {
+                            _logger.LogWarning("[MR] [EPISODE-WRONG-SEASON-FOLDER] DRY RUN: Would move episode from {From} to {To}", path, newEpisodePath);
+                        }
+                        else
+                        {
+                            File.Move(path, newEpisodePath);
+                            _logger.LogInformation("[MR] [EPISODE-WRONG-SEASON-FOLDER] ✓ Moved episode to correct season folder");
+                            _logger.LogInformation("[MR] [EPISODE-WRONG-SEASON-FOLDER] From: {From}", path);
+                            _logger.LogInformation("[MR] [EPISODE-WRONG-SEASON-FOLDER] To: {To}", newEpisodePath);
+                            
+                            // Update path for subsequent processing
+                            path = newEpisodePath;
+                            episodeDirectory = correctSeasonFolderPath;
+                            isInSeriesRoot = false;
+                        }
+                    }
+                    else
+                    {
+                        _logger.LogWarning("[MR] [EPISODE-WRONG-SEASON-FOLDER] Target file already exists in correct season folder. Skipping move. Path: {Path}", newEpisodePath);
+                        // Update path for subsequent processing
+                        path = newEpisodePath;
+                        episodeDirectory = correctSeasonFolderPath;
+                        isInSeriesRoot = false;
+                    }
+                }
+                else
+                {
+                    _logger.LogInformation("[MR] [EPISODE-CORRECT-SEASON-FOLDER] Episode is already in correct season folder: {Path}", correctSeasonFolderPath);
+                }
+            }
+            
             // #region agent log - Hypothesis C: Check IndexNumber at metadata access point
             try
             {
