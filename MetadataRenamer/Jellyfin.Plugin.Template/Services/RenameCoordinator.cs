@@ -4514,8 +4514,21 @@ public class RenameCoordinator
                 _logger.LogInformation("[MR] Episode is already in a season folder. Using season number from metadata: Season {Season}", 
                     seasonNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
             }
+
+            // CRITICAL: When metadata says Season 1 but the file is in a Season 2+ folder (e.g. "Season 11"),
+            // prefer the path-derived season. This fixes anime/long-running shows where providers (TMDB, etc.)
+            // map all episodes to "Season 1" while the user has correctly organized files in Season 01, 02, ... 21.
+            // Without this, we would move every episode into Season 01 and leave other season folders empty.
+            var seasonFromPath = TryGetSeasonNumberFromFolderPath(path);
+            if (seasonFromPath.HasValue && seasonFromPath.Value >= 2 &&
+                (seasonNumber == null || seasonNumber.Value == 1))
+            {
+                _logger.LogWarning("[MR] [SEASON-PATH-PREFER] Metadata says Season 1 but episode is in folder indicating Season {PathSeason}. Using path-derived season so files stay in correct season folder (common for anime/long-running shows).",
+                    seasonFromPath.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                seasonNumber = seasonFromPath.Value;
+            }
             
-            // CRITICAL: Ensure episode is in the correct season folder based on metadata
+            // CRITICAL: Ensure episode is in the correct season folder based on metadata (or path-derived season)
             // This handles cases where episodes are in the wrong season folder (e.g., Season 07 episodes in Season 01 folder)
             if (seasonNumber.HasValue && !string.IsNullOrWhiteSpace(seriesPath) && Directory.Exists(seriesPath))
             {
@@ -5061,6 +5074,43 @@ public class RenameCoordinator
                 episode.Name ?? "Unknown", seasonNum, episodeNum, episode.Id, ex.Message);
             _logger.LogError("[MR] Stack Trace: {StackTrace}", ex.StackTrace ?? "N/A");
         }
+    }
+
+    /// <summary>
+    /// Tries to extract the season number from an episode's path by parsing the parent directory name.
+    /// Handles patterns like "Season 01", "Season 11", "S01", "S11".
+    /// </summary>
+    /// <param name="episodeFilePath">Full path to the episode file.</param>
+    /// <returns>The season number if the parent directory matches a season folder pattern; otherwise null.</returns>
+    private static int? TryGetSeasonNumberFromFolderPath(string episodeFilePath)
+    {
+        if (string.IsNullOrWhiteSpace(episodeFilePath))
+        {
+            return null;
+        }
+
+        var episodeDirectory = Path.GetDirectoryName(episodeFilePath);
+        if (string.IsNullOrWhiteSpace(episodeDirectory))
+        {
+            return null;
+        }
+
+        var directoryName = Path.GetFileName(episodeDirectory);
+        if (string.IsNullOrWhiteSpace(directoryName))
+        {
+            return null;
+        }
+
+        var seasonMatch = System.Text.RegularExpressions.Regex.Match(
+            directoryName,
+            @"(?:Season\s*|S)(\d+)",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (seasonMatch.Success && int.TryParse(seasonMatch.Groups[1].Value, out var seasonNum))
+        {
+            return seasonNum;
+        }
+
+        return null;
     }
 
     /// <summary>
