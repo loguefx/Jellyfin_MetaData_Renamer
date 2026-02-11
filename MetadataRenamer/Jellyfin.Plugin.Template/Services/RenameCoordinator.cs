@@ -42,6 +42,11 @@ public class RenameCoordinator
     // Track series updates for detecting "Replace all metadata" (bulk refresh)
     private readonly Queue<DateTime> _seriesUpdateTimestamps = new(); // Timestamps of recent series updates
     private DateTime _lastBulkProcessingUtc = DateTime.MinValue;
+
+    // One-time per-folder mapping: folder path -> (file path -> (season, episodeWithinSeason)).
+    // Prevents duplicate S01E01 etc. when we move files (position would otherwise shift each time).
+    private readonly Dictionary<string, Dictionary<string, (int season, int episodeWithinSeason)>> _folderSeasonEpisodeMapCache = new();
+    private readonly object _folderSeasonEpisodeMapCacheLock = new object();
     private const int BulkUpdateThreshold = 5; // Number of series updates in time window to trigger bulk processing
     private const int BulkUpdateTimeWindowSeconds = 10; // Time window for detecting bulk updates
     private const int BulkProcessingCooldownMinutes = 5; // Cooldown between bulk processing runs
@@ -73,6 +78,7 @@ public class RenameCoordinator
             _episodeRetryCount.Clear();
             _episodeRetryReason.Clear();
             _seriesProcessedForEpisodes.Clear();
+            _folderSeasonEpisodeMapCache.Clear();
             _lastGlobalActionUtc = DateTime.MinValue;
             _logger?.LogInformation("[MR] RenameCoordinator state cleared");
         }
@@ -1640,7 +1646,10 @@ public class RenameCoordinator
                     series.Name ?? "NULL", series.Id);
                 return;
             }
-            
+
+            // Clear per-folder (season, episode) cache so position-based assignment is stable and we don't create duplicate S01E01 etc.
+            _folderSeasonEpisodeMapCache.Clear();
+
             // #region agent log - PROCESS-ALL-EPISODES-ENTRY: Track ProcessAllEpisodesFromSeries entry
             try
             {
@@ -4301,7 +4310,29 @@ public class RenameCoordinator
                 // #endregion
                 FixNestedSeasonFolders(seriesPath, cfg);
             }
-            
+
+            // Skip when episode is already in the correct season folder (per metadata) and already correctly named. Must match metadata.
+            if (episode.ParentIndexNumber.HasValue && episode.IndexNumber.HasValue && !string.IsNullOrWhiteSpace(seriesPath) && Directory.Exists(seriesPath))
+            {
+                var episodeTitleForSkip = ExtractCleanEpisodeTitle(episode);
+                var seasonFolderNameForSkip = SafeName.RenderSeasonFolder(cfg.SeasonFolderFormat, episode.ParentIndexNumber.Value, null);
+                var correctSeasonFolderForSkip = Path.Combine(seriesPath, seasonFolderNameForSkip);
+                var currentEpisodeDir = Path.GetDirectoryName(path);
+                var normCurrent = currentEpisodeDir?.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                var normCorrect = correctSeasonFolderForSkip.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                if (string.Equals(normCurrent, normCorrect, StringComparison.OrdinalIgnoreCase))
+                {
+                    int? yearForSkip = episode.Series?.ProductionYear ?? (episode.Series?.PremiereDate.HasValue == true ? episode.Series.PremiereDate.Value.Year : (int?)null);
+                    var desiredFileNameForSkip = SafeName.RenderEpisodeFileName(cfg.EpisodeFileFormat, episode.SeriesName?.Trim() ?? "", episode.ParentIndexNumber.Value, episode.IndexNumber.Value, episodeTitleForSkip ?? "", yearForSkip);
+                    var currentFileNameForSkip = Path.GetFileNameWithoutExtension(path);
+                    if (SafeName.DoFilenamesMatch(currentFileNameForSkip, desiredFileNameForSkip))
+                    {
+                        _logger.LogInformation("[MR] [SKIP] Episode already in correct season folder and correctly named (matches metadata). Skipping. Path={Path}, Season={Season}, Episode={Episode}", path, episode.ParentIndexNumber.Value, episode.IndexNumber.Value);
+                        return;
+                    }
+                }
+            }
+
             // Check if episode is directly in series folder (no season folder)
             // CRITICAL: We must verify that episodeDirectory is NOT a season folder before checking if it equals seriesPath
             // This prevents creating Season 1 folders inside other season folders
@@ -4538,11 +4569,11 @@ public class RenameCoordinator
 
             // Universal: compare folder episode count to metadata episode count for this season.
             // If metadata says Season 1 = episodes 1-36 and folder has 36 files, count matches — use metadata as-is.
-            // If folder has more than metadata count → redistribute by episode number.
-            // If library has wrong structure (all episodes under Season 1), metadata count equals folder count so we
-            // never enter mismatch. Use overstuffed threshold: when folder has >120 files in Season 01, redistribute by heuristic.
+            // Compare directory to metadata: correct amount of episodes per season comes from metadata (not a fixed number).
+            // Redistribute when folder has more files than metadata says for this season, or when folder is suspiciously overstuffed (wrong library structure).
             const int EpisodesPerSeasonHeuristic = 50; // fallback when metadata season lookup fails
-            const int OverstuffedFolderThreshold = 120; // folder with more than this in one season is likely wrong layout
+            const int OverstuffedFolderThreshold = 100; // folder with more than this in one season may have wrong layout (metadata might also be wrong)
+            const int MaxReasonablePerSeasonForHeuristic = 200; // only use heuristic split when metadata has a season with 200+ episodes (clearly wrong "all in one")
             var episodeDirectoryPath = Path.GetDirectoryName(path);
             var currentFolderSeason = TryGetSeasonNumberFromFolderPath(path);
             var episodeNumberForMapping = episode.IndexNumber ?? SafeName.ParseEpisodeNumberFromFileName(Path.GetFileNameWithoutExtension(path) ?? string.Empty);
@@ -4564,32 +4595,35 @@ public class RenameCoordinator
                 }
                 else if (folderFileCount > OverstuffedFolderThreshold && currentFolderSeason.Value == 1 && (seasonNumber == null || seasonNumber.Value == 1))
                 {
-                    // Library likely has wrong structure (all episodes under Season 1 in Jellyfin), so metadata count == folder count and we never mismatch. Redistribute by heuristic.
+                    // Folder has suspiciously many files in Season 01; metadata might also be wrong (e.g. all under S1). Redistribute using metadata counts or heuristic.
                     useMismatchLogic = true;
-                    _logger.LogWarning("[MR] [FOLDER-OVERSTUFFED] Folder has {FolderCount} files (threshold {Threshold}) in Season 01; library may have all episodes under S1. Redistributing by episode number (heuristic or metadata mapping). EpisodeId={EpisodeId}",
+                    _logger.LogWarning("[MR] [FOLDER-OVERSTUFFED] Folder has {FolderCount} files (over {Threshold}) in Season 01. Redistributing to match metadata episode counts per season. EpisodeId={EpisodeId}",
                         folderFileCount, OverstuffedFolderThreshold.ToString(System.Globalization.CultureInfo.InvariantCulture), episode.Id);
                 }
                 if (useMismatchLogic)
                 {
                     isOverstuffedSeasonFolder = true;
-                    // Match directory to metadata exactly: get metadata episode counts per season (e.g. S1=32, S2=54),
-                    // get this file's position in folder when sorted by episode number, then assign position 1-32 → S1, 33-86 → S2, etc.
-                    var metadataCounts = GetMetadataSeasonEpisodeCountsOrdered(episode.Series, folderFileCount, OverstuffedFolderThreshold);
-                    var positionInFolder = GetPositionInFolderByEpisodeOrder(episodeDirectoryPath, path);
-                    var positionBasedAssigned = false;
-                    if (metadataCounts != null && metadataCounts.Count > 0 && positionInFolder.HasValue)
+                    // Prefer metadata for season/episode so we don't change episode numbers; only use position-based mapping when metadata is missing.
+                    var hasMetadataSeasonAndEpisode = episode.IndexNumber.HasValue && episode.ParentIndexNumber.HasValue;
+                    if (hasMetadataSeasonAndEpisode)
                     {
-                        var (position1Based, totalInFolder) = positionInFolder.Value;
-                        var mapped = MapPositionToSeasonAndEpisode(metadataCounts, position1Based);
-                        if (mapped.HasValue)
+                        seasonNumber = episode.ParentIndexNumber;
+                        episodeNumberWithinSeasonFromMapping = episode.IndexNumber;
+                        _logger.LogInformation("[MR] [METADATA-PREFER] Using metadata for filename: Season {Season} Episode {Episode} (no episode number change). EpisodeId={EpisodeId}",
+                            seasonNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture), episodeNumberWithinSeasonFromMapping?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "?", episode.Id);
+                    }
+                    else
+                    {
+                        var cachedMapping = GetOrBuildCachedSeasonEpisodeForFile(episodeDirectoryPath, path, episode.Series, folderFileCount, MaxReasonablePerSeasonForHeuristic);
+                        if (cachedMapping.HasValue)
                         {
-                            seasonNumber = mapped.Value.season;
-                            episodeNumberWithinSeasonFromMapping = mapped.Value.episodeWithinSeason;
-                            positionBasedAssigned = true;
-                            _logger.LogInformation("[MR] [METADATA-MATCH] Directory matched to metadata: position {Position}/{Total} in folder (by episode order) → Season {Season} Episode {EpWithin}. EpisodeId={EpisodeId}",
-                                position1Based.ToString(System.Globalization.CultureInfo.InvariantCulture), totalInFolder.ToString(System.Globalization.CultureInfo.InvariantCulture), seasonNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture), episodeNumberWithinSeasonFromMapping?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "?", episode.Id);
+                            seasonNumber = cachedMapping.Value.season;
+                            episodeNumberWithinSeasonFromMapping = cachedMapping.Value.episodeWithinSeason;
+                            _logger.LogInformation("[MR] [METADATA-MATCH] Stable mapping (metadata missing): folder {Folder} → Season {Season} Episode {EpWithin}. EpisodeId={EpisodeId}",
+                                episodeDirectoryPath, seasonNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture), episodeNumberWithinSeasonFromMapping?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "?", episode.Id);
                         }
                     }
+                    var positionBasedAssigned = hasMetadataSeasonAndEpisode || (episodeNumberWithinSeasonFromMapping.HasValue && seasonNumber.HasValue);
                     if (!positionBasedAssigned)
                     {
                         // Fallback: use episode number from filename → metadata or heuristic
@@ -4637,36 +4671,37 @@ public class RenameCoordinator
                 }
             }
 
-            // CRITICAL: When metadata says Season 1 but the file is in a Season 2+ folder (e.g. "Season 11"),
-            // prefer the path-derived season. This fixes anime/long-running shows where providers (TMDB, etc.)
-            // map all episodes to "Season 1" while the user has correctly organized files in Season 01, 02, ... 21.
-            // Skip when folder is overstuffed (we trust metadata to redistribute).
+            // When metadata has season number, never change it (user wants season/episode from metadata; only fix title and format).
+            // Only use path/filename when metadata season is missing or clearly wrong (e.g. provider maps all to S1).
+            var hasMetadataSeason = episode.ParentIndexNumber.HasValue;
             var seasonFromPath = TryGetSeasonNumberFromFolderPath(path);
-            if (!isOverstuffedSeasonFolder && seasonFromPath.HasValue && seasonFromPath.Value >= 2 &&
+            if (!hasMetadataSeason && !isOverstuffedSeasonFolder && seasonFromPath.HasValue && seasonFromPath.Value >= 2 &&
                 (seasonNumber == null || seasonNumber.Value == 1))
             {
-                _logger.LogWarning("[MR] [SEASON-PATH-PREFER] Metadata says Season 1 but episode is in folder indicating Season {PathSeason}. Using path-derived season so files stay in correct season folder (common for anime/long-running shows).",
+                _logger.LogWarning("[MR] [SEASON-PATH-PREFER] Metadata has no season; episode is in folder indicating Season {PathSeason}. Using path-derived season.",
                     seasonFromPath.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
                 seasonNumber = seasonFromPath.Value;
             }
+            else if (hasMetadataSeason && (seasonNumber == null || seasonNumber.Value == 1) && seasonFromPath.HasValue && seasonFromPath.Value >= 2)
+            {
+                _logger.LogInformation("[MR] [SEASON-METADATA-PREFER] Using metadata season {Season} (not changing to path-derived {PathSeason}). EpisodeId={EpisodeId}",
+                    seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", seasonFromPath.Value.ToString(System.Globalization.CultureInfo.InvariantCulture), episode.Id);
+            }
 
-            // When episode is in Season 01 and metadata says Season 1, check if the FILENAME indicates a different
-            // season (e.g. S08E205, or "S01E269 - ONE PIECE_S11E269_" where max season is 11). Many episodes get
-            // wrong metadata (ParentIndexNumber=1) from providers. Use max season from all SxxExx in filename so we
-            // move and rename into the correct season folder. Skip when folder is overstuffed (we trust metadata).
             var currentFileNameForSeason = Path.GetFileNameWithoutExtension(path);
             var seasonFromFilename = SafeName.ParseMaxSeasonNumberFromFileName(currentFileNameForSeason ?? string.Empty);
-            if (!isOverstuffedSeasonFolder && seasonFromFilename.HasValue && seasonFromFilename.Value >= 2 &&
+            if (!hasMetadataSeason && !isOverstuffedSeasonFolder && seasonFromFilename.HasValue && seasonFromFilename.Value >= 2 &&
                 (seasonNumber == null || seasonNumber.Value == 1) &&
                 (seasonFromPath == null || seasonFromPath.Value == 1))
             {
-                _logger.LogWarning("[MR] [SEASON-FILENAME-PREFER] Episode is in Season 01 with metadata Season 1 but filename indicates Season {FilenameSeason} (e.g. S{FilenameSeason}E##). Using filename-derived season to move and rename into correct season folder. EpisodeId={EpisodeId}, FileName={FileName}",
-                    seasonFromFilename.Value.ToString(System.Globalization.CultureInfo.InvariantCulture), seasonFromFilename.Value.ToString(System.Globalization.CultureInfo.InvariantCulture), episode.Id, currentFileNameForSeason ?? "NULL");
+                _logger.LogWarning("[MR] [SEASON-FILENAME-PREFER] Metadata has no season; filename indicates Season {FilenameSeason}. Using filename-derived season. EpisodeId={EpisodeId}, FileName={FileName}",
+                    seasonFromFilename.Value.ToString(System.Globalization.CultureInfo.InvariantCulture), episode.Id, currentFileNameForSeason ?? "NULL");
                 seasonNumber = seasonFromFilename.Value;
             }
             
-            // CRITICAL: Ensure episode is in the correct season folder based on metadata (or path/filename-derived season)
-            // This handles cases where episodes are in the wrong season folder (e.g., Season 07 episodes in Season 01 folder)
+            // Move episode to the correct season folder according to metadata (seasonNumber = episode.ParentIndexNumber when metadata exists).
+            // Then rename with correct format and title. We do not change season or episode numbers when metadata exists.
+            // CRITICAL: Target folder must match metadata so each season folder contains the right episodes.
             if (seasonNumber.HasValue && !string.IsNullOrWhiteSpace(seriesPath) && Directory.Exists(seriesPath))
             {
                 // Get season name from metadata
@@ -5216,10 +5251,10 @@ public class RenameCoordinator
 
     /// <summary>
     /// Gets the ordered list of (season index, episode count) from metadata so directory can match exactly.
-    /// E.g. [(1, 32), (2, 54), (3, 48)] means Season 1 has 32 episodes, Season 2 has 54, etc.
-    /// If any season has count greater than maxReasonable (e.g. 120), returns heuristic split so we can still distribute.
+    /// E.g. [(1, 61), (2, 54), (3, 48)] means Season 1 has 61 episodes, Season 2 has 54, etc. Uses metadata as-is.
+    /// Only if a season has more than maxReasonablePerSeason (e.g. 200) do we use a heuristic split (wrong "all in one" library structure).
     /// </summary>
-    private System.Collections.Generic.List<(int seasonIndex, int episodeCount)> GetMetadataSeasonEpisodeCountsOrdered(MediaBrowser.Controller.Entities.TV.Series series, int folderFileCount, int maxReasonablePerSeason = 120)
+    private System.Collections.Generic.List<(int seasonIndex, int episodeCount)> GetMetadataSeasonEpisodeCountsOrdered(MediaBrowser.Controller.Entities.TV.Series series, int folderFileCount, int maxReasonablePerSeason = 200)
     {
         if (series == null)
             return null;
@@ -5259,7 +5294,7 @@ public class RenameCoordinator
                 result.Clear();
                 for (var i = 1; i <= numSeasons; i++)
                     result.Add((i, i < numSeasons ? heuristicPerSeason : (folderFileCount - (numSeasons - 1) * heuristicPerSeason)));
-                _logger.LogInformation("[MR] [METADATA-MATCH] Using heuristic season counts ({EpsPerSeason} eps/season, {Seasons} seasons) so directory can match; metadata had one season with too many episodes.", heuristicPerSeason.ToString(System.Globalization.CultureInfo.InvariantCulture), numSeasons.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                _logger.LogInformation("[MR] [METADATA-MATCH] Metadata had one season with >{Max} episodes (wrong structure). Using heuristic ({EpsPerSeason} eps/season, {Seasons} seasons) so directory can match.", maxReasonablePerSeason.ToString(System.Globalization.CultureInfo.InvariantCulture), heuristicPerSeason.ToString(System.Globalization.CultureInfo.InvariantCulture), numSeasons.ToString(System.Globalization.CultureInfo.InvariantCulture));
             }
             return result;
         }
@@ -5311,15 +5346,57 @@ public class RenameCoordinator
         if (counts == null || counts.Count == 0 || position1Based < 1)
             return null;
         var cumulative = 0;
+        var lastSeason = (seasonIndex: 0, episodeCount: 0);
         foreach (var (seasonIndex, episodeCount) in counts)
         {
+            lastSeason = (seasonIndex, episodeCount);
             var start = cumulative + 1;
             var end = cumulative + episodeCount;
             if (position1Based >= start && position1Based <= end)
                 return (seasonIndex, position1Based - start + 1);
             cumulative = end;
         }
+        // Overflow: folder has more files than metadata total; assign to last season so every file gets a stable (season, ep).
+        if (position1Based > cumulative && lastSeason.seasonIndex >= 1)
+            return (lastSeason.seasonIndex, lastSeason.episodeCount + (position1Based - cumulative));
         return null;
+    }
+
+    /// <summary>
+    /// Gets or builds a one-time (season, episodeWithinSeason) mapping for the folder and returns the assignment for the current file.
+    /// Prevents duplicate S01E01/S01E02 etc. by fixing each file's assignment when we first see the folder, instead of recomputing position after moves.
+    /// </summary>
+    private (int season, int episodeWithinSeason)? GetOrBuildCachedSeasonEpisodeForFile(string folderPath, string currentFilePath, MediaBrowser.Controller.Entities.TV.Series series, int folderFileCount, int overstuffedThreshold)
+    {
+        if (string.IsNullOrWhiteSpace(folderPath) || string.IsNullOrWhiteSpace(currentFilePath) || !Directory.Exists(folderPath) || series == null)
+            return null;
+        var normalizedFolder = Path.GetFullPath(folderPath);
+        lock (_folderSeasonEpisodeMapCacheLock)
+        {
+            if (_folderSeasonEpisodeMapCache.TryGetValue(normalizedFolder, out var fileMap) && fileMap.TryGetValue(currentFilePath, out var cached))
+                return cached;
+
+            var videoExtensions = new[] { ".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm", ".m4v" };
+            var files = Directory.GetFiles(folderPath)
+                .Where(f => videoExtensions.Contains(Path.GetExtension(f).ToLowerInvariant()))
+                .Select(f => new { Path = f, EpisodeNumber = SafeName.ParseEpisodeNumberFromFileName(Path.GetFileNameWithoutExtension(f) ?? string.Empty) })
+                .OrderBy(x => x.EpisodeNumber ?? int.MaxValue)
+                .ThenBy(x => Path.GetFileName(x.Path), StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            var metadataCounts = GetMetadataSeasonEpisodeCountsOrdered(series, folderFileCount, overstuffedThreshold);
+            if (metadataCounts == null || metadataCounts.Count == 0)
+                return null;
+            var newMap = new Dictionary<string, (int season, int episodeWithinSeason)>(StringComparer.OrdinalIgnoreCase);
+            for (var i = 0; i < files.Count; i++)
+            {
+                var position1Based = i + 1;
+                var mapped = MapPositionToSeasonAndEpisode(metadataCounts, position1Based);
+                if (mapped.HasValue)
+                    newMap[files[i].Path] = mapped.Value;
+            }
+            _folderSeasonEpisodeMapCache[normalizedFolder] = newMap;
+            return newMap.TryGetValue(currentFilePath, out var result) ? result : null;
+        }
     }
 
     /// <summary>
