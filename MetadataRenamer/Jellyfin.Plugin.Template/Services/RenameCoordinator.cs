@@ -3375,7 +3375,82 @@ public class RenameCoordinator
 
             _logger.LogInformation("[MR] Found {Count} season folder(s). Checking for nested structures...", seasonFolders.Count);
             
-            // Check if any season folders need to be renamed to match the format
+            // PHASE 1: Flatten nested season folders INSIDE standard season folders
+            // e.g., "Season 01" containing "Season 01" and "Season 01 - Season 1" -> move episodes up, remove nested
+            var videoExtensions = new[] { ".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm", ".m4v" };
+            foreach (var seasonFolder in seasonFolders.ToList())
+            {
+                var seasonFolderName = Path.GetFileName(seasonFolder);
+                var innerSubdirs = Directory.GetDirectories(seasonFolder);
+                foreach (var innerDir in innerSubdirs)
+                {
+                    var innerName = Path.GetFileName(innerDir);
+                    if (!containsSeasonPattern.IsMatch(innerName))
+                    {
+                        continue;
+                    }
+                    var innerFiles = Directory.GetFiles(innerDir);
+                    var hasVideoFiles = innerFiles.Any(f => videoExtensions.Contains(Path.GetExtension(f).ToLowerInvariant()));
+                    if (!hasVideoFiles && Directory.GetDirectories(innerDir).Length == 0)
+                    {
+                        continue;
+                    }
+                    _logger.LogInformation("[MR] Found nested season folder '{Nested}' inside '{Parent}'. Moving {Count} file(s) up...",
+                        innerName, seasonFolderName, innerFiles.Length);
+                    foreach (var file in innerFiles)
+                    {
+                        var fileName = Path.GetFileName(file);
+                        var targetPath = Path.Combine(seasonFolder, fileName);
+                        if (File.Exists(targetPath))
+                        {
+                            _logger.LogWarning("[MR] SKIP: Target file already exists. File: {FileName}", fileName);
+                            continue;
+                        }
+                        try
+                        {
+                            File.Move(file, targetPath);
+                            _logger.LogInformation("[MR] ✓ Moved from nested: {FileName}", fileName);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError(ex, "[MR] ERROR moving file from nested folder: {FileName}", fileName);
+                        }
+                    }
+                    try
+                    {
+                        if (Directory.GetFiles(innerDir).Length == 0 && Directory.GetDirectories(innerDir).Length == 0)
+                        {
+                            Directory.Delete(innerDir);
+                            _logger.LogInformation("[MR] ✓ Removed empty nested folder: {Path}", innerDir);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "[MR] Could not remove nested folder: {Path}", innerDir);
+                    }
+                }
+                // Also remove empty nested season-named folders (e.g., empty "Season 01" inside "Season 01")
+                foreach (var innerDir in Directory.GetDirectories(seasonFolder).ToList())
+                {
+                    var innerName = Path.GetFileName(innerDir);
+                    if (containsSeasonPattern.IsMatch(innerName) &&
+                        Directory.GetFiles(innerDir).Length == 0 &&
+                        Directory.GetDirectories(innerDir).Length == 0)
+                    {
+                        try
+                        {
+                            Directory.Delete(innerDir);
+                            _logger.LogInformation("[MR] ✓ Removed empty nested folder: {Path}", innerDir);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "[MR] Could not remove empty nested folder: {Path}", innerDir);
+                        }
+                    }
+                }
+            }
+            
+            // PHASE 2: Rename non-standard season folders (e.g., "Season 01 - Season 1" -> "Season 01")
             var desiredSeason1Name = SafeName.RenderSeasonFolder(cfg.SeasonFolderFormat, 1, null);
             var desiredSeason1Path = Path.Combine(seriesPath, desiredSeason1Name);
             
