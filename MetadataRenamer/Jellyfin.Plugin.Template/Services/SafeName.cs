@@ -99,6 +99,13 @@ public static class SafeName
     public static string RenderSeasonFolder(string format, int? seasonNumber, string seasonName)
     {
         var s = format ?? "Season {Season:00}";
+
+        // Treat generic season names ("Season 1", "Season 2", etc.) as empty to avoid duplication
+        // e.g., "Season 01 - Season 1" -> "Season 01". Real names like "East Blue Saga" are preserved.
+        if (IsGenericSeasonName(seasonName))
+        {
+            seasonName = string.Empty;
+        }
         
         // Replace season name if available
         if (!string.IsNullOrWhiteSpace(seasonName))
@@ -446,6 +453,22 @@ public static class SafeName
         var normalizedDesired = NormalizeFileNameForComparison(desired);
 
         return string.Equals(normalizedCurrent, normalizedDesired, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Returns true if the season name is a generic fallback (e.g., "Season 1", "Season 2")
+    /// that would duplicate the season number when used in formats like "Season {Season:00} - {SeasonName}".
+    /// Real metadata names like "East Blue Saga" return false.
+    /// </summary>
+    private static bool IsGenericSeasonName(string seasonName)
+    {
+        if (string.IsNullOrWhiteSpace(seasonName))
+        {
+            return true;
+        }
+
+        // Match: "Season" followed by optional spaces and digits only (e.g., "Season 1", "Season 01", "Season1")
+        return Regex.IsMatch(seasonName.Trim(), @"^Season\s*\d+$", RegexOptions.IgnoreCase);
     }
 
     private static string CollapseSpaces(string s)
