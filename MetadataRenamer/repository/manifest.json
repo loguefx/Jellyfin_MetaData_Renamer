@@ -5,18 +5,18 @@
       "description":  "MetadataRenamer renames series, season, and episode files when you identify a series in Jellyfin. Format: {SeriesName} ({Year}) [{provider}-{id}]. Matches directory to metadata exactly (per-season episode counts, position by episode order). Keeps episodes in correct season folders for anime/long-running shows. Dry-run, collision checks, per-item cooldown.",
       "versions":  [
                        {
-                           "changelog":  "Match directory to metadata exactly: folder count vs metadata per-season; position-by-episode-order; overstuffed fallback. Null IndexNumber/ParentIndexNumber; skip cooldown during bulk.",
-                           "version":  "1.0.0.1",
+                           "changelog":  "Metadata-first: season/episode and target folder from metadata; skip when already in correct folder and correctly named. Per-folder stable mapping; per-season counts from metadata. Move to correct season folder; rename format and title only.",
+                           "version":  "1.0.0.2",
                            "checksum":  "448056DF161E65794291531DEB41F322",
-                           "timestamp":  "2026-02-11T07:39:22.991Z",
+                           "timestamp":  "2026-02-11T08:47:30.490Z",
                            "targetAbi":  "10.10.0.0",
                            "sourceUrl":  "https://raw.githubusercontent.com/loguefx/Jellyfin_MetaData_Renamer/main/MetadataRenamer/repository/Jellyfin.Plugin.MetadataRenamer.zip"
                        },
                        {
-                           "changelog":  "Match directory to metadata exactly: folder count vs metadata per-season; position-by-episode-order; overstuffed fallback. Null IndexNumber/ParentIndexNumber; skip cooldown during bulk.",
-                           "version":  "1.0.0.1",
+                           "changelog":  "Metadata-first: season/episode and target folder from metadata; skip when already in correct folder and correctly named. Per-folder stable mapping; per-season counts from metadata. Move to correct season folder; rename format and title only.",
+                           "version":  "1.0.0.2",
                            "checksum":  "448056DF161E65794291531DEB41F322",
-                           "timestamp":  "2026-02-11T07:39:22.991Z",
+                           "timestamp":  "2026-02-11T08:47:30.490Z",
                            "targetAbi":  "10.11.0.0",
                            "sourceUrl":  "https://raw.githubusercontent.com/loguefx/Jellyfin_MetaData_Renamer/main/MetadataRenamer/repository/Jellyfin.Plugin.MetadataRenamer.zip"
                        }
