@@ -342,6 +342,58 @@ public static class SafeName
     }
 
     /// <summary>
+    /// Attempts to parse a season number from a filename using S##E## or s##e## pattern.
+    /// Uses the first match. For multiple patterns (e.g. "S01E269 - Title_S11E269_") use
+    /// <see cref="ParseMaxSeasonNumberFromFileName"/> to get the highest season.
+    /// </summary>
+    /// <param name="fileName">The filename (with or without extension) to parse.</param>
+    /// <returns>The season number if SxxExx pattern is found, null otherwise.</returns>
+    public static int? ParseSeasonNumberFromFileName(string fileName)
+    {
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
+            return null;
+        }
+
+        var match = Regex.Match(fileName, @"[Ss](\d+)[Ee](\d+)", RegexOptions.IgnoreCase);
+        if (match.Success && match.Groups.Count >= 2 && int.TryParse(match.Groups[1].Value, out var seasonNum))
+        {
+            return seasonNum;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Parses all S##E## patterns in the filename and returns the maximum season number.
+    /// Use when filename may contain multiple season hints (e.g. "S01E269 - ONE PIECE_S11E269_").
+    /// </summary>
+    /// <param name="fileName">The filename (with or without extension) to parse.</param>
+    /// <returns>The maximum season number found, or null if no SxxExx pattern is found.</returns>
+    public static int? ParseMaxSeasonNumberFromFileName(string fileName)
+    {
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
+            return null;
+        }
+
+        var matches = Regex.Matches(fileName, @"[Ss](\d+)[Ee](\d+)", RegexOptions.IgnoreCase);
+        int? maxSeason = null;
+        foreach (Match m in matches)
+        {
+            if (m.Groups.Count >= 2 && int.TryParse(m.Groups[1].Value, out var seasonNum))
+            {
+                if (!maxSeason.HasValue || seasonNum > maxSeason.Value)
+                {
+                    maxSeason = seasonNum;
+                }
+            }
+        }
+
+        return maxSeason;
+    }
+
+    /// <summary>
     /// Extracts a clean episode title from episode.Name by removing filename patterns.
     /// Removes patterns like "S02E06 - ", repeated patterns, and series name patterns.
     /// </summary>

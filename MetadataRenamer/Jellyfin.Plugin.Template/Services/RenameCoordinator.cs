@@ -4515,20 +4515,55 @@ public class RenameCoordinator
                     seasonNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
             }
 
+            // Overstuffed season folder: when one folder has far more episodes than a normal season (e.g. 1007 in
+            // "Season 01"), the layout is wrong. Trust metadata so we move/rename each episode into the correct
+            // season folder and align with metadata (episode name, season, episode number).
+            const int OverstuffedSeasonThreshold = 120;
+            var episodeDirectoryPath = Path.GetDirectoryName(path);
+            var isOverstuffedSeasonFolder = false;
+            if (!string.IsNullOrWhiteSpace(episodeDirectoryPath) && Directory.Exists(episodeDirectoryPath))
+            {
+                var videoExtensions = new[] { ".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm", ".m4v" };
+                var fileCount = Directory.GetFiles(episodeDirectoryPath)
+                    .Count(f => videoExtensions.Contains(Path.GetExtension(f).ToLowerInvariant()));
+                if (fileCount > OverstuffedSeasonThreshold)
+                {
+                    isOverstuffedSeasonFolder = true;
+                    _logger.LogWarning("[MR] [OVERSTUFFED-SEASON] Season folder has {Count} video files (threshold {Threshold}). Trusting metadata to separate episodes into correct season folders. Episode will use metadata: Season {Season}, Episode {Episode}.",
+                        fileCount, OverstuffedSeasonThreshold, episode.ParentIndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+                    seasonNumber = episode.ParentIndexNumber;
+                }
+            }
+
             // CRITICAL: When metadata says Season 1 but the file is in a Season 2+ folder (e.g. "Season 11"),
             // prefer the path-derived season. This fixes anime/long-running shows where providers (TMDB, etc.)
             // map all episodes to "Season 1" while the user has correctly organized files in Season 01, 02, ... 21.
-            // Without this, we would move every episode into Season 01 and leave other season folders empty.
+            // Skip when folder is overstuffed (we trust metadata to redistribute).
             var seasonFromPath = TryGetSeasonNumberFromFolderPath(path);
-            if (seasonFromPath.HasValue && seasonFromPath.Value >= 2 &&
+            if (!isOverstuffedSeasonFolder && seasonFromPath.HasValue && seasonFromPath.Value >= 2 &&
                 (seasonNumber == null || seasonNumber.Value == 1))
             {
                 _logger.LogWarning("[MR] [SEASON-PATH-PREFER] Metadata says Season 1 but episode is in folder indicating Season {PathSeason}. Using path-derived season so files stay in correct season folder (common for anime/long-running shows).",
                     seasonFromPath.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
                 seasonNumber = seasonFromPath.Value;
             }
+
+            // When episode is in Season 01 and metadata says Season 1, check if the FILENAME indicates a different
+            // season (e.g. S08E205, or "S01E269 - ONE PIECE_S11E269_" where max season is 11). Many episodes get
+            // wrong metadata (ParentIndexNumber=1) from providers. Use max season from all SxxExx in filename so we
+            // move and rename into the correct season folder. Skip when folder is overstuffed (we trust metadata).
+            var currentFileNameForSeason = Path.GetFileNameWithoutExtension(path);
+            var seasonFromFilename = SafeName.ParseMaxSeasonNumberFromFileName(currentFileNameForSeason ?? string.Empty);
+            if (!isOverstuffedSeasonFolder && seasonFromFilename.HasValue && seasonFromFilename.Value >= 2 &&
+                (seasonNumber == null || seasonNumber.Value == 1) &&
+                (seasonFromPath == null || seasonFromPath.Value == 1))
+            {
+                _logger.LogWarning("[MR] [SEASON-FILENAME-PREFER] Episode is in Season 01 with metadata Season 1 but filename indicates Season {FilenameSeason} (e.g. S{FilenameSeason}E##). Using filename-derived season to move and rename into correct season folder. EpisodeId={EpisodeId}, FileName={FileName}",
+                    seasonFromFilename.Value.ToString(System.Globalization.CultureInfo.InvariantCulture), seasonFromFilename.Value.ToString(System.Globalization.CultureInfo.InvariantCulture), episode.Id, currentFileNameForSeason ?? "NULL");
+                seasonNumber = seasonFromFilename.Value;
+            }
             
-            // CRITICAL: Ensure episode is in the correct season folder based on metadata (or path-derived season)
+            // CRITICAL: Ensure episode is in the correct season folder based on metadata (or path/filename-derived season)
             // This handles cases where episodes are in the wrong season folder (e.g., Season 07 episodes in Season 01 folder)
             if (seasonNumber.HasValue && !string.IsNullOrWhiteSpace(seriesPath) && Directory.Exists(seriesPath))
             {
