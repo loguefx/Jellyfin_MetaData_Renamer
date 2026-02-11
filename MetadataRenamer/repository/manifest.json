@@ -2,27 +2,27 @@
   {
       "name":  "MetadataRenamer",
       "owner":  "loguefx",
-      "description":  "MetadataRenamer automatically renames series folders, season folders, and episode files when you identify a series in Jellyfin. Series format: {SeriesName} ({Year}) [{provider}-{id}], for example: \u0027The Flash (2014) [tvdb-279121]\u0027. For anime and long-running shows, when metadata reports Season 1 but files are in Season 2+ folders, the plugin keeps episodes in the correct season folder. Renames when provider IDs change, with dry-run mode, collision checks, and per-item cooldown.",
+      "description":  "MetadataRenamer renames series, season, and episode files when you identify a series in Jellyfin. Format: {SeriesName} ({Year}) [{provider}-{id}]. Matches directory to metadata exactly (per-season episode counts, position by episode order). Keeps episodes in correct season folders for anime/long-running shows. Dry-run, collision checks, per-item cooldown.",
       "versions":  [
                        {
-                           "changelog":  "Fix: path/filename-derived season; process episodes with null IndexNumber/ParentIndexNumber; skip cooldown during bulk.",
+                           "changelog":  "Match directory to metadata exactly: folder count vs metadata per-season; position-by-episode-order; overstuffed fallback. Null IndexNumber/ParentIndexNumber; skip cooldown during bulk.",
                            "version":  "1.0.0.1",
-                           "checksum":  "803FB62BB50A1C48A839AD60AC681562",
-                           "timestamp":  "2026-02-11T05:25:08.138Z",
+                           "checksum":  "448056DF161E65794291531DEB41F322",
+                           "timestamp":  "2026-02-11T07:39:22.991Z",
                            "targetAbi":  "10.10.0.0",
                            "sourceUrl":  "https://raw.githubusercontent.com/loguefx/Jellyfin_MetaData_Renamer/main/MetadataRenamer/repository/Jellyfin.Plugin.MetadataRenamer.zip"
                        },
                        {
-                           "changelog":  "Fix: path/filename-derived season; process episodes with null IndexNumber/ParentIndexNumber; skip cooldown during bulk.",
+                           "changelog":  "Match directory to metadata exactly: folder count vs metadata per-season; position-by-episode-order; overstuffed fallback. Null IndexNumber/ParentIndexNumber; skip cooldown during bulk.",
                            "version":  "1.0.0.1",
-                           "checksum":  "803FB62BB50A1C48A839AD60AC681562",
-                           "timestamp":  "2026-02-11T05:25:08.138Z",
+                           "checksum":  "448056DF161E65794291531DEB41F322",
+                           "timestamp":  "2026-02-11T07:39:22.991Z",
                            "targetAbi":  "10.11.0.0",
                            "sourceUrl":  "https://raw.githubusercontent.com/loguefx/Jellyfin_MetaData_Renamer/main/MetadataRenamer/repository/Jellyfin.Plugin.MetadataRenamer.zip"
                        }
                    ],
       "category":  "General",
-      "overview":  "Renames series folders, season folders, and episode files; keeps episodes in correct season folders when metadata misreports season.",
+      "overview":  "Renames series, season, and episode files; matches directory to metadata per-season counts and episode order.",
       "guid":  "eb5d7894-8eef-4b36-aa6f-5d124e828ce1"
   }
 ]
