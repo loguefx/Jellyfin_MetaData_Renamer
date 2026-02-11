@@ -4537,10 +4537,12 @@ public class RenameCoordinator
             }
 
             // Universal: compare folder episode count to metadata episode count for this season.
-            // If metadata says Season 1 = episodes 1-36, and the folder has 36 files, count matches — use metadata as-is.
-            // If the folder has more than 36 (e.g. 583), count doesn't add up — map each episode number to the
-            // correct metadata season (1-36 → S1, 37-90 → S2, etc.) and move/rename into the right season folder.
+            // If metadata says Season 1 = episodes 1-36 and folder has 36 files, count matches — use metadata as-is.
+            // If folder has more than metadata count → redistribute by episode number.
+            // If library has wrong structure (all episodes under Season 1), metadata count equals folder count so we
+            // never enter mismatch. Use overstuffed threshold: when folder has >120 files in Season 01, redistribute by heuristic.
             const int EpisodesPerSeasonHeuristic = 50; // fallback when metadata season lookup fails
+            const int OverstuffedFolderThreshold = 120; // folder with more than this in one season is likely wrong layout
             var episodeDirectoryPath = Path.GetDirectoryName(path);
             var currentFolderSeason = TryGetSeasonNumberFromFolderPath(path);
             var episodeNumberForMapping = episode.IndexNumber ?? SafeName.ParseEpisodeNumberFromFileName(Path.GetFileNameWithoutExtension(path) ?? string.Empty);
@@ -4551,48 +4553,87 @@ public class RenameCoordinator
                 var folderFileCount = Directory.GetFiles(episodeDirectoryPath)
                     .Count(f => videoExtensions.Contains(Path.GetExtension(f).ToLowerInvariant()));
                 var metadataEpisodeCountForThisSeason = GetMetadataEpisodeCountForSeason(episode.Series, currentFolderSeason.Value);
+                _logger.LogInformation("[MR] [FOLDER-COUNT-DEBUG] Path={Path}, currentFolderSeason={FolderSeason}, folderFileCount={FolderCount}, metadataEpisodeCountForSeason={MetadataCount}, episodeNumberForMapping={EpNum}",
+                    path, currentFolderSeason.Value.ToString(System.Globalization.CultureInfo.InvariantCulture), folderFileCount.ToString(System.Globalization.CultureInfo.InvariantCulture), metadataEpisodeCountForThisSeason?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", episodeNumberForMapping?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+                var useMismatchLogic = false;
                 if (metadataEpisodeCountForThisSeason.HasValue && folderFileCount > metadataEpisodeCountForThisSeason.Value)
                 {
-                    // Folder has more files than metadata says for this season — redistribute by episode number.
-                    isOverstuffedSeasonFolder = true;
+                    useMismatchLogic = true;
                     _logger.LogWarning("[MR] [FOLDER-COUNT-MISMATCH] Folder has {FolderCount} video files but metadata says Season {Season} has {MetadataCount} episodes. Using episode number to determine correct season. EpisodeId={EpisodeId}",
                         folderFileCount, currentFolderSeason.Value.ToString(System.Globalization.CultureInfo.InvariantCulture), metadataEpisodeCountForThisSeason.Value.ToString(System.Globalization.CultureInfo.InvariantCulture), episode.Id);
-                    if (episodeNumberForMapping.HasValue && episodeNumberForMapping.Value > 0)
+                }
+                else if (folderFileCount > OverstuffedFolderThreshold && currentFolderSeason.Value == 1 && (seasonNumber == null || seasonNumber.Value == 1))
+                {
+                    // Library likely has wrong structure (all episodes under Season 1 in Jellyfin), so metadata count == folder count and we never mismatch. Redistribute by heuristic.
+                    useMismatchLogic = true;
+                    _logger.LogWarning("[MR] [FOLDER-OVERSTUFFED] Folder has {FolderCount} files (threshold {Threshold}) in Season 01; library may have all episodes under S1. Redistributing by episode number (heuristic or metadata mapping). EpisodeId={EpisodeId}",
+                        folderFileCount, OverstuffedFolderThreshold.ToString(System.Globalization.CultureInfo.InvariantCulture), episode.Id);
+                }
+                if (useMismatchLogic)
+                {
+                    isOverstuffedSeasonFolder = true;
+                    // Match directory to metadata exactly: get metadata episode counts per season (e.g. S1=32, S2=54),
+                    // get this file's position in folder when sorted by episode number, then assign position 1-32 → S1, 33-86 → S2, etc.
+                    var metadataCounts = GetMetadataSeasonEpisodeCountsOrdered(episode.Series, folderFileCount, OverstuffedFolderThreshold);
+                    var positionInFolder = GetPositionInFolderByEpisodeOrder(episodeDirectoryPath, path);
+                    var positionBasedAssigned = false;
+                    if (metadataCounts != null && metadataCounts.Count > 0 && positionInFolder.HasValue)
                     {
-                        var fileNameForInfer = Path.GetFileNameWithoutExtension(path);
-                        var seasonFromFileNameMismatch = SafeName.ParseMaxSeasonNumberFromFileName(fileNameForInfer ?? string.Empty);
-                        if (seasonFromFileNameMismatch.HasValue && seasonFromFileNameMismatch.Value >= 2)
+                        var (position1Based, totalInFolder) = positionInFolder.Value;
+                        var mapped = MapPositionToSeasonAndEpisode(metadataCounts, position1Based);
+                        if (mapped.HasValue)
                         {
-                            seasonNumber = seasonFromFileNameMismatch.Value;
-                            _logger.LogInformation("[MR] [FOLDER-COUNT-MISMATCH] Using filename-derived season {Season}. FileName={FileName}", seasonNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture), fileNameForInfer ?? "NULL");
+                            seasonNumber = mapped.Value.season;
+                            episodeNumberWithinSeasonFromMapping = mapped.Value.episodeWithinSeason;
+                            positionBasedAssigned = true;
+                            _logger.LogInformation("[MR] [METADATA-MATCH] Directory matched to metadata: position {Position}/{Total} in folder (by episode order) → Season {Season} Episode {EpWithin}. EpisodeId={EpisodeId}",
+                                position1Based.ToString(System.Globalization.CultureInfo.InvariantCulture), totalInFolder.ToString(System.Globalization.CultureInfo.InvariantCulture), seasonNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture), episodeNumberWithinSeasonFromMapping?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "?", episode.Id);
                         }
-                        else
+                    }
+                    if (!positionBasedAssigned)
+                    {
+                        // Fallback: use episode number from filename → metadata or heuristic
+                        if (episodeNumberForMapping.HasValue && episodeNumberForMapping.Value > 0)
                         {
-                            var (targetSeason, episodeWithinSeason) = TryGetSeasonAndEpisodeFromAbsoluteEpisodeNumber(episode.Series, episodeNumberForMapping.Value);
-                            if (targetSeason.HasValue && targetSeason.Value >= 1)
+                            var fileNameForInfer = Path.GetFileNameWithoutExtension(path);
+                            var seasonFromFileNameMismatch = SafeName.ParseMaxSeasonNumberFromFileName(fileNameForInfer ?? string.Empty);
+                            if (seasonFromFileNameMismatch.HasValue && seasonFromFileNameMismatch.Value >= 2)
                             {
-                                seasonNumber = targetSeason.Value;
-                                if (episodeWithinSeason.HasValue && episodeWithinSeason.Value >= 1)
-                                    episodeNumberWithinSeasonFromMapping = episodeWithinSeason.Value;
-                                _logger.LogInformation("[MR] [FOLDER-COUNT-MISMATCH] Episode {Episode} maps to metadata Season {Season} Episode {EpWithin}. Moving to correct season folder.", episodeNumberForMapping.Value.ToString(System.Globalization.CultureInfo.InvariantCulture), seasonNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture), episodeNumberWithinSeasonFromMapping?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "?");
+                                seasonNumber = seasonFromFileNameMismatch.Value;
+                                _logger.LogInformation("[MR] [FOLDER-COUNT-MISMATCH] Using filename-derived season {Season}. FileName={FileName}", seasonNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture), fileNameForInfer ?? "NULL");
                             }
                             else
                             {
-                                var inferredSeason = Math.Min(1 + (episodeNumberForMapping.Value - 1) / EpisodesPerSeasonHeuristic, 30);
-                                seasonNumber = inferredSeason;
-                                episodeNumberWithinSeasonFromMapping = 1 + (episodeNumberForMapping.Value - 1) % EpisodesPerSeasonHeuristic; // within-season for heuristic
-                                _logger.LogWarning("[MR] [FOLDER-COUNT-MISMATCH] Metadata season lookup failed; using heuristic season {Season} from episode {Episode} ({EpsPerSeason} eps/season).", inferredSeason.ToString(System.Globalization.CultureInfo.InvariantCulture), episodeNumberForMapping.Value.ToString(System.Globalization.CultureInfo.InvariantCulture), EpisodesPerSeasonHeuristic);
+                                var (targetSeason, episodeWithinSeason) = TryGetSeasonAndEpisodeFromAbsoluteEpisodeNumber(episode.Series, episodeNumberForMapping.Value);
+                                if (targetSeason.HasValue && targetSeason.Value >= 1)
+                                {
+                                    seasonNumber = targetSeason.Value;
+                                    if (episodeWithinSeason.HasValue && episodeWithinSeason.Value >= 1)
+                                        episodeNumberWithinSeasonFromMapping = episodeWithinSeason.Value;
+                                    _logger.LogInformation("[MR] [FOLDER-COUNT-MISMATCH] Episode {Episode} maps to metadata Season {Season} Episode {EpWithin}. Moving to correct season folder.", episodeNumberForMapping.Value.ToString(System.Globalization.CultureInfo.InvariantCulture), seasonNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture), episodeNumberWithinSeasonFromMapping?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "?");
+                                }
+                                else
+                                {
+                                    var inferredSeason = Math.Min(1 + (episodeNumberForMapping.Value - 1) / EpisodesPerSeasonHeuristic, 30);
+                                    seasonNumber = inferredSeason;
+                                    episodeNumberWithinSeasonFromMapping = 1 + (episodeNumberForMapping.Value - 1) % EpisodesPerSeasonHeuristic;
+                                    _logger.LogWarning("[MR] [FOLDER-COUNT-MISMATCH] Metadata season lookup failed; using heuristic season {Season} from episode {Episode} ({EpsPerSeason} eps/season).", inferredSeason.ToString(System.Globalization.CultureInfo.InvariantCulture), episodeNumberForMapping.Value.ToString(System.Globalization.CultureInfo.InvariantCulture), EpisodesPerSeasonHeuristic);
+                                }
                             }
                         }
-                    }
-                    else
-                    {
-                        _logger.LogWarning("[MR] [FOLDER-COUNT-MISMATCH] Could not get episode number from filename/metadata; keeping season {Season}.", seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+                        else
+                        {
+                            _logger.LogWarning("[MR] [FOLDER-COUNT-MISMATCH] Could not get episode number or position; keeping season {Season}. EpisodeId={EpisodeId}, FileName={FileName}", seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", episode.Id, Path.GetFileName(path) ?? "NULL");
+                        }
                     }
                 }
                 else if (metadataEpisodeCountForThisSeason.HasValue && folderFileCount <= metadataEpisodeCountForThisSeason.Value)
                 {
                     _logger.LogInformation("[MR] [FOLDER-COUNT-OK] Folder has {FolderCount} files, metadata Season {Season} has {MetadataCount} episodes. Count matches or is under; using metadata.", folderFileCount.ToString(System.Globalization.CultureInfo.InvariantCulture), currentFolderSeason.Value.ToString(System.Globalization.CultureInfo.InvariantCulture), metadataEpisodeCountForThisSeason.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                }
+                else if (!metadataEpisodeCountForThisSeason.HasValue)
+                {
+                    _logger.LogInformation("[MR] [FOLDER-COUNT-DEBUG] No metadata episode count for Season {Season}; skipping count-based redistribution.", currentFolderSeason.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
                 }
             }
 
@@ -5171,6 +5212,114 @@ public class RenameCoordinator
                 episode.Name ?? "Unknown", seasonNum, episodeNum, episode.Id, ex.Message);
             _logger.LogError("[MR] Stack Trace: {StackTrace}", ex.StackTrace ?? "N/A");
         }
+    }
+
+    /// <summary>
+    /// Gets the ordered list of (season index, episode count) from metadata so directory can match exactly.
+    /// E.g. [(1, 32), (2, 54), (3, 48)] means Season 1 has 32 episodes, Season 2 has 54, etc.
+    /// If any season has count greater than maxReasonable (e.g. 120), returns heuristic split so we can still distribute.
+    /// </summary>
+    private System.Collections.Generic.List<(int seasonIndex, int episodeCount)> GetMetadataSeasonEpisodeCountsOrdered(MediaBrowser.Controller.Entities.TV.Series series, int folderFileCount, int maxReasonablePerSeason = 120)
+    {
+        if (series == null)
+            return null;
+        try
+        {
+            var seasons = _libraryManager.GetItemList(new MediaBrowser.Controller.Entities.InternalItemsQuery
+            {
+                ParentId = series.Id,
+                IncludeItemTypes = new[] { Jellyfin.Data.Enums.BaseItemKind.Season },
+                Recursive = false
+            }).Cast<MediaBrowser.Controller.Entities.TV.Season>()
+              .OrderBy(s => s.IndexNumber ?? int.MaxValue)
+              .ToList();
+            var result = new System.Collections.Generic.List<(int, int)>();
+            bool useHeuristic = false;
+            foreach (var season in seasons)
+            {
+                var seasonIndex = season.IndexNumber ?? 0;
+                if (seasonIndex < 1)
+                    continue;
+                var count = _libraryManager.GetItemList(new MediaBrowser.Controller.Entities.InternalItemsQuery
+                {
+                    ParentId = season.Id,
+                    IncludeItemTypes = new[] { Jellyfin.Data.Enums.BaseItemKind.Episode },
+                    Recursive = false
+                }).Count;
+                if (count > maxReasonablePerSeason)
+                    useHeuristic = true;
+                result.Add((seasonIndex, count));
+            }
+            if (result.Count == 0)
+                return null;
+            if (useHeuristic && folderFileCount > maxReasonablePerSeason)
+            {
+                const int heuristicPerSeason = 50;
+                var numSeasons = Math.Min(30, (folderFileCount + heuristicPerSeason - 1) / heuristicPerSeason);
+                result.Clear();
+                for (var i = 1; i <= numSeasons; i++)
+                    result.Add((i, i < numSeasons ? heuristicPerSeason : (folderFileCount - (numSeasons - 1) * heuristicPerSeason)));
+                _logger.LogInformation("[MR] [METADATA-MATCH] Using heuristic season counts ({EpsPerSeason} eps/season, {Seasons} seasons) so directory can match; metadata had one season with too many episodes.", heuristicPerSeason.ToString(System.Globalization.CultureInfo.InvariantCulture), numSeasons.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            }
+            return result;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[MR] [METADATA-MATCH] Could not get season episode counts: {Error}", ex.Message);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Gets this file's 1-based position when all video files in the folder are sorted by episode number (from filename).
+    /// So we can match "first 32 in order → Season 1, next 54 → Season 2" exactly to metadata.
+    /// </summary>
+    private (int position1Based, int totalCount)? GetPositionInFolderByEpisodeOrder(string folderPath, string currentFilePath)
+    {
+        if (string.IsNullOrWhiteSpace(folderPath) || string.IsNullOrWhiteSpace(currentFilePath) || !Directory.Exists(folderPath))
+            return null;
+        try
+        {
+            var videoExtensions = new[] { ".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm", ".m4v" };
+            var files = Directory.GetFiles(folderPath)
+                .Where(f => videoExtensions.Contains(Path.GetExtension(f).ToLowerInvariant()))
+                .Select(f => new { Path = f, EpisodeNumber = SafeName.ParseEpisodeNumberFromFileName(Path.GetFileNameWithoutExtension(f) ?? string.Empty) })
+                .OrderBy(x => x.EpisodeNumber ?? int.MaxValue)
+                .ThenBy(x => Path.GetFileName(x.Path), StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            var currentFileName = Path.GetFileName(currentFilePath);
+            for (var i = 0; i < files.Count; i++)
+            {
+                if (string.Equals(Path.GetFileName(files[i].Path), currentFileName, StringComparison.OrdinalIgnoreCase))
+                    return (i + 1, files.Count);
+            }
+            return null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[MR] [METADATA-MATCH] Could not get position in folder: {Error}", ex.Message);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Maps 1-based position (e.g. 33) to (season, episode within season) using metadata counts.
+    /// E.g. counts [(1,32), (2,54)] → position 1-32 → (1,1)..(1,32), position 33-86 → (2,1)..(2,54).
+    /// </summary>
+    private (int season, int episodeWithinSeason)? MapPositionToSeasonAndEpisode(System.Collections.Generic.List<(int seasonIndex, int episodeCount)> counts, int position1Based)
+    {
+        if (counts == null || counts.Count == 0 || position1Based < 1)
+            return null;
+        var cumulative = 0;
+        foreach (var (seasonIndex, episodeCount) in counts)
+        {
+            var start = cumulative + 1;
+            var end = cumulative + episodeCount;
+            if (position1Based >= start && position1Based <= end)
+                return (seasonIndex, position1Based - start + 1);
+            cumulative = end;
+        }
+        return null;
     }
 
     /// <summary>
