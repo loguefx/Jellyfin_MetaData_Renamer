@@ -3852,14 +3852,17 @@ public class RenameCoordinator
             }
             
             // Log season name status
+            // IMPORTANT: Even if metadata only displays the season name (e.g., "East Blue"), 
+            // Jellyfin's IndexNumber always contains the season number (e.g., 1, 2, 3).
+            // We use IndexNumber for the season number and Name for the season name.
             if (!string.IsNullOrWhiteSpace(seasonName))
             {
-                _logger.LogInformation("[MR] [SEASON-NAME] Season {Season} has name: '{SeasonName}'", 
+                _logger.LogInformation("[MR] [SEASON-NAME] Season {Season} has name: '{SeasonName}' (will render as 'Season {Season:00} - {SeasonName}')", 
                     seasonNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture), seasonName);
             }
             else
             {
-                _logger.LogInformation("[MR] [SEASON-NAME] Season {Season} has no name (will use season number only)", 
+                _logger.LogInformation("[MR] [SEASON-NAME] Season {Season} has no name (will render as 'Season {Season:00}' only)", 
                     seasonNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
             }
             
