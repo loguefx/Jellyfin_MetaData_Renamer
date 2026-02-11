@@ -3851,14 +3851,33 @@ public class RenameCoordinator
                 return;
             }
             
+            // Log season name status
+            if (!string.IsNullOrWhiteSpace(seasonName))
+            {
+                _logger.LogInformation("[MR] [SEASON-NAME] Season {Season} has name: '{SeasonName}'", 
+                    seasonNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture), seasonName);
+            }
+            else
+            {
+                _logger.LogInformation("[MR] [SEASON-NAME] Season {Season} has no name (will use season number only)", 
+                    seasonNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            }
+            
             _logger.LogInformation("[MR] [DEBUG] [SEASON-METADATA-VALIDATION] Season metadata validated: SeasonNumber={SeasonNumber}, SeasonName={SeasonName}", 
-                seasonNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture), seasonName);
+                seasonNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture), seasonName ?? "NULL");
 
             // Build desired folder name using METADATA VALUES ONLY
+            _logger.LogInformation("[MR] [SEASON-FOLDER-RENDER] Rendering season folder name: Format='{Format}', Season={Season}, SeasonName='{SeasonName}'", 
+                cfg.SeasonFolderFormat, 
+                seasonNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                seasonName ?? "NULL");
+            
             var desiredFolderName = SafeName.RenderSeasonFolder(
                 cfg.SeasonFolderFormat,
                 seasonNumber,
                 seasonName);
+            
+            _logger.LogInformation("[MR] [SEASON-FOLDER-RENDER] Rendered season folder name: '{FolderName}'", desiredFolderName);
 
             _logger.LogInformation("[MR] === Season Folder Rename Details ===");
             _logger.LogInformation("[MR] Current Folder: {Current}", currentFolderName);
@@ -4286,12 +4305,23 @@ public class RenameCoordinator
                         if (season1 != null)
                         {
                             season1NameFromMetadata = season1.Name?.Trim();
-                            _logger.LogInformation("[MR] Found Season 1 name from metadata: '{SeasonName}'", season1NameFromMetadata ?? "NULL");
+                            if (!string.IsNullOrWhiteSpace(season1NameFromMetadata))
+                            {
+                                _logger.LogInformation("[MR] [SEASON-NAME] Found Season 1 name from metadata: '{SeasonName}'", season1NameFromMetadata);
+                            }
+                            else
+                            {
+                                _logger.LogInformation("[MR] [SEASON-NAME] Season 1 exists in metadata but has no name (will use season number only)");
+                            }
+                        }
+                        else
+                        {
+                            _logger.LogWarning("[MR] [SEASON-NAME] Season 1 not found in metadata (will use season number only)");
                         }
                     }
                     catch (Exception seasonEx)
                     {
-                        _logger.LogWarning(seasonEx, "[MR] Could not retrieve Season 1 name from metadata: {Error}", seasonEx.Message);
+                        _logger.LogWarning(seasonEx, "[MR] [SEASON-NAME] Could not retrieve Season 1 name from metadata: {Error}", seasonEx.Message);
                     }
                 }
                 
@@ -4301,7 +4331,13 @@ public class RenameCoordinator
                 _logger.LogInformation("[MR] Season Folder Format: {Format}", cfg.SeasonFolderFormat ?? "Season {Season:00} - {SeasonName}");
                 _logger.LogInformation("[MR] Season Number for folder: 1");
                 
+                _logger.LogInformation("[MR] [SEASON-FOLDER-RENDER] Rendering Season 1 folder name: Format='{Format}', Season=1, SeasonName='{SeasonName}'", 
+                    cfg.SeasonFolderFormat, 
+                    season1NameFromMetadata ?? "NULL");
+                
                 var season1FolderName = SafeName.RenderSeasonFolder(cfg.SeasonFolderFormat, 1, season1NameFromMetadata);
+                
+                _logger.LogInformation("[MR] [SEASON-FOLDER-RENDER] Rendered Season 1 folder name: '{FolderName}'", season1FolderName);
                 var season1FolderPath = Path.Combine(seriesPath, season1FolderName);
                 
                 _logger.LogInformation("[MR] Season 1 Folder Name (rendered): {FolderName}", season1FolderName);
@@ -4424,23 +4460,43 @@ public class RenameCoordinator
                         if (matchingSeason != null)
                         {
                             seasonNameFromMetadata = matchingSeason.Name?.Trim();
-                            _logger.LogInformation("[MR] Found season name from metadata: Season {Season} = '{SeasonName}'", 
-                                seasonNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture), 
-                                seasonNameFromMetadata ?? "NULL");
+                            if (!string.IsNullOrWhiteSpace(seasonNameFromMetadata))
+                            {
+                                _logger.LogInformation("[MR] [SEASON-NAME] Found season name from metadata: Season {Season} = '{SeasonName}'", 
+                                    seasonNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture), 
+                                    seasonNameFromMetadata);
+                            }
+                            else
+                            {
+                                _logger.LogInformation("[MR] [SEASON-NAME] Season {Season} exists in metadata but has no name (will use season number only)", 
+                                    seasonNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                            }
+                        }
+                        else
+                        {
+                            _logger.LogWarning("[MR] [SEASON-NAME] Season {Season} not found in metadata (will use season number only)", 
+                                seasonNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
                         }
                     }
                     catch (Exception seasonEx)
                     {
-                        _logger.LogWarning(seasonEx, "[MR] Could not retrieve season name from metadata: {Error}", seasonEx.Message);
+                        _logger.LogWarning(seasonEx, "[MR] [SEASON-NAME] Could not retrieve season name from metadata: {Error}", seasonEx.Message);
                     }
                 }
                 
                 // Determine the correct season folder name
+                _logger.LogInformation("[MR] [SEASON-FOLDER-RENDER] Rendering season folder name: Format='{Format}', Season={Season}, SeasonName='{SeasonName}'", 
+                    cfg.SeasonFolderFormat, 
+                    seasonNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    seasonNameFromMetadata ?? "NULL");
+                
                 var correctSeasonFolderName = SafeName.RenderSeasonFolder(
                     cfg.SeasonFolderFormat,
                     seasonNumber.Value,
                     seasonNameFromMetadata);
                 var correctSeasonFolderPath = Path.Combine(seriesPath, correctSeasonFolderName);
+                
+                _logger.LogInformation("[MR] [SEASON-FOLDER-RENDER] Rendered season folder name: '{FolderName}'", correctSeasonFolderName);
                 
                 // Check if episode is currently in the correct season folder
                 var currentEpisodeDirectory = Path.GetDirectoryName(path);

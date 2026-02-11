@@ -107,8 +107,12 @@ public static class SafeName
         }
         else
         {
-            // Remove season name placeholder if not available
-            s = Regex.Replace(s, @"{SeasonName}", string.Empty, RegexOptions.IgnoreCase);
+            // Remove season name placeholder and surrounding separators if not available
+            // This handles formats like "Season {Season:00} - {SeasonName}" -> "Season 07" (removes " - ")
+            s = Regex.Replace(s, @"\s*-\s*{SeasonName}", string.Empty, RegexOptions.IgnoreCase);
+            s = Regex.Replace(s, @"\s*–\s*{SeasonName}", string.Empty, RegexOptions.IgnoreCase); // En dash
+            s = Regex.Replace(s, @"\s*—\s*{SeasonName}", string.Empty, RegexOptions.IgnoreCase); // Em dash
+            s = Regex.Replace(s, @"\s*{SeasonName}\s*", string.Empty, RegexOptions.IgnoreCase); // Fallback for any remaining
         }
         
         // Replace season number
