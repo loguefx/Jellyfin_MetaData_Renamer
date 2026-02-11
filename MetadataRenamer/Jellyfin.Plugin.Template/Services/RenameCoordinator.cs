@@ -2448,22 +2448,33 @@ public class RenameCoordinator
                     // as long as we can derive it from the path or it's in a season folder
                     bool hasValidMetadata = episode.IndexNumber.HasValue;
                     bool hasSeasonNumber = episode.ParentIndexNumber.HasValue;
-                    
-                    // For Season 2+ episodes in season folders, try to derive season number from path
-                    if (!hasSeasonNumber && isSeason2Plus && !string.IsNullOrWhiteSpace(episodePath))
+
+                    // When Jellyfin has no IndexNumber (e.g. "Episode=NULL"), derive from filename so we still process
+                    if (!hasValidMetadata && !string.IsNullOrWhiteSpace(episodePath))
                     {
-                        var episodeDir = Path.GetDirectoryName(episodePath);
-                        if (!string.IsNullOrWhiteSpace(episodeDir))
+                        var fileNameNoExt = Path.GetFileNameWithoutExtension(episodePath);
+                        var parsedEpisode = SafeName.ParseEpisodeNumberFromFileName(fileNameNoExt ?? string.Empty);
+                        if (parsedEpisode.HasValue)
                         {
-                            var dirName = Path.GetFileName(episodeDir);
-                            // Try to extract season number from folder name (e.g., "Season 02", "S02", "Season 2")
-                            var seasonMatch = System.Text.RegularExpressions.Regex.Match(dirName, @"(?:Season\s*|S)(\d+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-                            if (seasonMatch.Success && int.TryParse(seasonMatch.Groups[1].Value, out var extractedSeason))
-                            {
-                                _logger.LogWarning("[MR] [DEBUG] [SEASON2+-METADATA-FIX] Derived season number {Season} from folder path for episode {EpisodeId}", extractedSeason, episode.Id);
-                                // Use reflection to set ParentIndexNumber if possible, or process with derived value
-                                hasSeasonNumber = true;
-                            }
+                            hasValidMetadata = true;
+                            episodeNum = parsedEpisode.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                            _logger.LogInformation("[MR] [EPISODE-FROM-FILENAME] Episode has no IndexNumber in metadata; derived episode {Episode} from filename. EpisodeId={Id}, Path={Path}",
+                                episodeNum, episode.Id, episodePath);
+                        }
+                    }
+                    
+                    // When metadata has no season number, derive from path (any season folder)
+                    if (!hasSeasonNumber && !string.IsNullOrWhiteSpace(episodePath))
+                    {
+                        var seasonFromPath = TryGetSeasonNumberFromFolderPath(episodePath);
+                        if (seasonFromPath.HasValue)
+                        {
+                            hasSeasonNumber = true;
+                            seasonNum = seasonFromPath.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                            seasonNumber = seasonFromPath.Value;
+                            isSeason2Plus = seasonNumber >= 2;
+                            _logger.LogInformation("[MR] [SEASON-FROM-PATH] Episode has no ParentIndexNumber in metadata; derived season {Season} from path. EpisodeId={Id}, Path={Path}",
+                                seasonNum, episode.Id, episodePath);
                         }
                     }
                     
@@ -4229,8 +4240,8 @@ public class RenameCoordinator
             }
             // #endregion
 
-            // Per-item cooldown
-            if (_lastAttemptUtcByItem.TryGetValue(episode.Id, out var lastTry))
+            // Per-item cooldown (skip during bulk processing so all episodes in one run get processed)
+            if (!isBulkProcessing && _lastAttemptUtcByItem.TryGetValue(episode.Id, out var lastTry))
             {
                 var timeSinceLastTry = (now - lastTry).TotalSeconds;
                 if (timeSinceLastTry < cfg.PerItemCooldownSeconds)
@@ -4504,9 +4515,18 @@ public class RenameCoordinator
             }
             else if (seasonNumber == null)
             {
-                // Episode is in a season folder but metadata doesn't have season number - use 1 as fallback
-                seasonNumber = 1;
-                _logger.LogInformation("[MR] Episode is in a season folder but metadata season number is NULL. Using Season 1 as fallback.");
+                // Episode is in a season folder but metadata doesn't have season number - try path first, then fallback to 1
+                var seasonFromPathHere = TryGetSeasonNumberFromFolderPath(path);
+                if (seasonFromPathHere.HasValue)
+                {
+                    seasonNumber = seasonFromPathHere.Value;
+                    _logger.LogInformation("[MR] [SEASON-FROM-PATH] Episode metadata season is NULL; derived Season {Season} from path.", seasonNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                }
+                else
+                {
+                    seasonNumber = 1;
+                    _logger.LogInformation("[MR] Episode is in a season folder but metadata season number is NULL. Using Season 1 as fallback.");
+                }
             }
             else
             {
