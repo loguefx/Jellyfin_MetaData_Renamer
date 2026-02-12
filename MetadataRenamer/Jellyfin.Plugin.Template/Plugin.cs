@@ -894,18 +894,12 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
             }
             catch (System.UnauthorizedAccessException uaEx)
             {
-                if (renamed && System.IO.File.Exists(tempName))
-                {
-                    try { System.IO.File.Move(tempName, dllPath); } catch (Exception restoreEx) { _ = restoreEx; }
-                }
+                TryRestoreRenamedFile(tempName, dllPath, renamed);
                 _logger?.LogError(uaEx, "[MR] [DIAGNOSTIC-6] ✗ DLL cannot be renamed (antivirus/file indexing?). CAUSE: External process. SOLUTION: Disable antivirus/indexing temporarily, then delete folder.");
             }
             catch (System.IO.IOException ioEx)
             {
-                if (renamed && System.IO.File.Exists(tempName))
-                {
-                    try { System.IO.File.Move(tempName, dllPath); } catch { }
-                }
+                TryRestoreRenamedFile(tempName, dllPath, renamed);
                 _logger?.LogError(ioEx, "[MR] [DIAGNOSTIC-6] ✗ DLL cannot be renamed ({Message}). File is locked by another process.", ioEx.Message);
             }
         }
@@ -913,5 +907,12 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
         {
             _logger?.LogError(ex, "[MR] [DIAGNOSTIC-6] ✗ Error checking external locks: {Message}", ex.Message);
         }
+    }
+
+    private static void TryRestoreRenamedFile(string tempName, string dllPath, bool renamed)
+    {
+        if (!renamed || !System.IO.File.Exists(tempName))
+            return;
+        try { System.IO.File.Move(tempName, dllPath); } catch (Exception ex) { _ = ex; }
     }
 }
