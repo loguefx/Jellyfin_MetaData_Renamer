@@ -511,148 +511,12 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
 
                 if (disposing)
                 {
-                    // #region agent log
                     DebugLogHelper.SafeAppend( System.Text.Json.JsonSerializer.Serialize(new { sessionId = DebugSessionId, runId = "run1", hypothesisId = "A", location = "Plugin.cs:147", message = "Dispose disposing=true", data = new { wasDisposed = _disposed }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
-                    // #endregion
-                    
                     _disposed = true;
-
-                    // Log plugin folder path before cleanup
-                    try
-                    {
-                        var pluginsPath = ApplicationPaths?.PluginsPath ?? UnknownPathPlaceholder;
-                        var version = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? DefaultVersionFallback;
-                        var versionedPluginPath = System.IO.Path.Combine(pluginsPath, $"{Name}_{version}");
-                        _logger?.LogDebug("[MR] Pre-cleanup: VersionedFolder exists={Exists}", System.IO.Directory.Exists(versionedPluginPath));
-                        
-                        // Check DLL file specifically
-                        if (System.IO.Directory.Exists(versionedPluginPath))
-                        {
-                            var dllPath = System.IO.Path.Combine(versionedPluginPath, "Jellyfin.Plugin.MetadataRenamer.dll");
-                            if (System.IO.File.Exists(dllPath))
-                            {
-                                // Try to check if file is locked
-                                try
-                                {
-                                    using (var fs = System.IO.File.Open(dllPath, System.IO.FileMode.Open, System.IO.FileAccess.Read, System.IO.FileShare.ReadWrite))
-                                    {
-                                        _ = fs.Length; // S108: verify file is readable
-                                    }
-                                }
-                                catch (Exception fileEx)
-                                {
-                                    _logger?.LogWarning(fileEx, "[MR] DLL File appears to be locked: {Message}", fileEx.Message);
-                                }
-                            }
-                            else
-                            {
-                                _logger?.LogWarning("[MR] DLL file not found at expected path: {Path}", dllPath);
-                            }
-                            
-                            try
-                            {
-                                var files = System.IO.Directory.GetFiles(versionedPluginPath);
-                                _logger?.LogDebug("[MR] Plugin folder files: {Count}", files.Length);
-                            }
-                            catch (Exception listEx)
-                            {
-                                _logger?.LogWarning(listEx, "[MR] Could not list files in plugin folder");
-                            }
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger?.LogWarning(ex, "[MR] Could not check plugin folder path");
-                    }
-
-                    try
-                    {
-                        // Unsubscribe from events FIRST to prevent any new event processing
-                        // This must happen synchronously to ensure the DLL can be unloaded
-                        if (_libraryManager != null)
-                        {
-                            // #region agent log - Uninstall debugging
-                            try
-                            {
-                                var logData = new { sessionId = DebugSessionId, runId = "run1", hypothesisId = "UNINSTALL-C", location = "Plugin.cs:550", message = "Unsubscribing from events", data = new { libraryManagerExists = _libraryManager != null }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
-                                var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                                DebugLogHelper.SafeAppend( logJson);
-                                _logger?.LogDebug("[MR] Unsubscribing from events");
-                            }
-                            catch
-                            {
-                                // Intentionally ignore: debug log must not impact unsubscribe.
-                            }
-                            // #endregion
-                            _libraryManager.ItemUpdated -= OnItemUpdated;
-                            _logger?.LogDebug("[MR] Event handler unsubscribed");
-                        }
-                        else
-                        {
-                            _logger?.LogWarning("[MR] LibraryManager is null - cannot unsubscribe");
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger?.LogError(ex, "[MR] ERROR unsubscribing from events: {Message}. {Stack}", ex.Message, ex.StackTrace ?? "N/A");
-                        // #region agent log - Uninstall debugging
-                        try
-                        {
-                            var logData = new { sessionId = DebugSessionId, runId = "run1", hypothesisId = "UNINSTALL-C", location = "Plugin.cs:565", message = "ERROR unsubscribing from events", data = new { error = ex.Message, stackTrace = ex.StackTrace, errorType = ex.GetType().FullName }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
-                            var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                            DebugLogHelper.SafeAppend( logJson);
-                            _logger?.LogError("[MR] ERROR unsubscribing: {Error}", ex.Message);
-                        }
-                        catch
-                        {
-                            // Intentionally ignore: debug log must not impact error handling.
-                        }
-                        // #endregion
-                    }
-
-                    try
-                    {
-                        // Clear internal state from services to help with assembly unloading
-                        if (_renameCoordinator != null)
-                        {
-                            _renameCoordinator.ClearState();
-                            // Note: Cannot null readonly fields, but ClearState() releases internal references
-                        }
-                        
-                        if (_pathRenameService != null)
-                        {
-                            // PathRenameService has no internal state to clear
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger?.LogError(ex, "[MR] ERROR clearing service references: {Message}", ex.Message);
-                    }
-
-                    try
-                    {
-                        // Clear static instance reference immediately
-                        // This is critical for Jellyfin to properly uninstall the plugin
-                        if (Instance == this)
-                        {
-                            // #region agent log
-                            DebugLogHelper.SafeAppend( System.Text.Json.JsonSerializer.Serialize(new { sessionId = DebugSessionId, runId = "run1", hypothesisId = "A", location = "Plugin.cs:186", message = "Clearing static Instance", data = new { }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
-                            // #endregion
-                            Instance = null;
-                        }
-                        else
-                        {
-                            _logger?.LogWarning("[MR] Static instance is not this instance - may have been cleared already");
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger?.LogError(ex, "[MR] ERROR clearing static instance: {Message}", ex.Message);
-                        // #region agent log
-                        DebugLogHelper.SafeAppend( System.Text.Json.JsonSerializer.Serialize(new { sessionId = DebugSessionId, runId = "run1", hypothesisId = "A", location = "Plugin.cs:195", message = "ERROR clearing instance", data = new { error = ex.Message }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
-                        // #endregion
-                    }
-
+                    LogPreCleanupPluginFolder();
+                    UnsubscribeFromLibraryEvents();
+                    ClearServiceState();
+                    ClearStaticInstance();
                     try
                     {
                         _logger?.LogDebug("[MR] Dispose: Assembly={Assembly}", System.Reflection.Assembly.GetExecutingAssembly().GetName().Name);
@@ -661,97 +525,9 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
                     {
                         _logger?.LogWarning(ex, "[MR] Could not log assembly/thread information: {Message}", ex.Message);
                     }
-
-
-                    // Log plugin folder path after cleanup
-                    try
-                    {
-                        var pluginsPath = ApplicationPaths?.PluginsPath ?? UnknownPathPlaceholder;
-                        var version = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? DefaultVersionFallback;
-                        var versionedPluginPath = System.IO.Path.Combine(pluginsPath, $"{Name}_{version}");
-                        _logger?.LogDebug("[MR] Post-cleanup: VersionedFolder exists={Exists}", System.IO.Directory.Exists(versionedPluginPath));
-                        
-                        if (System.IO.Directory.Exists(versionedPluginPath))
-                        {
-                            _logger?.LogWarning("[MR] ⚠️ Versioned plugin folder still exists after Dispose: {Path}", versionedPluginPath);
-                            
-                            // Check DLL file status
-                            var dllPath = System.IO.Path.Combine(versionedPluginPath, "Jellyfin.Plugin.MetadataRenamer.dll");
-                            if (System.IO.File.Exists(dllPath))
-                            {
-                                _logger?.LogWarning("[MR] DLL still exists: {Path}", dllPath);
-                                try
-                                {
-                                    var dllInfo = new System.IO.FileInfo(dllPath);
-                                    _logger?.LogDebug("[MR] DLL: Size={Size}, Modified={Modified}", dllInfo.Length, dllInfo.LastWriteTime);
-                                    
-                                    // Try to check file lock with different access modes
-                                    try
-                                    {
-                                        // Try with ReadWrite share mode (allows other readers)
-                                        using (var fs = System.IO.File.Open(dllPath, System.IO.FileMode.Open, System.IO.FileAccess.Read, System.IO.FileShare.ReadWrite))
-                                        {
-                                            _logger?.LogDebug("[MR] DLL can be opened (may still be locked by Jellyfin)");
-                                        }
-                                        
-                                        // Try to delete the file directly to see what error we get
-                                        try
-                                        {
-                                            System.IO.File.Delete(dllPath);
-                                            _logger?.LogInformation("[MR] DLL file deleted successfully");
-                                        }
-                                        catch (System.UnauthorizedAccessException uaEx)
-                                        {
-                                            _logger?.LogError(uaEx, "[MR] DLL delete failed (locked): {Message}", uaEx.Message);
-                                        }
-                                        catch (System.IO.IOException ioEx)
-                                        {
-                                            _logger?.LogError(ioEx, "[MR] DLL delete failed (locked): {Message}", ioEx.Message);
-                                        }
-                                    }
-                                    catch (System.IO.IOException ioEx)
-                                    {
-                                        _logger?.LogError(ioEx, "[MR] DLL file is LOCKED and cannot be opened: {Message}", ioEx.Message);
-                                    }
-                                }
-                                catch (Exception fileEx)
-                                {
-                                    _logger?.LogWarning(fileEx, "[MR] Could not check DLL file status");
-                                }
-                            }
-                            
-                            _logger?.LogError("[MR] Uninstall diagnostics: Plugin folder still exists at {Path}. Recommended fix: Stop Jellyfin, delete folder, then restart.", versionedPluginPath);
-                            
-                            // Comprehensive diagnostics
-                            DiagnoseUninstallFailure(versionedPluginPath, dllPath);
-                        }
-                        else
-                        {
-                            _logger?.LogDebug("[MR] Versioned plugin folder does not exist");
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger?.LogWarning(ex, "[MR] Could not check plugin folder path after cleanup");
-                    }
-
+                    LogPostCleanupAndDiagnose();
                     _logger?.LogDebug("[MR] Dispose cleanup complete");
-                    
-                    // #region agent log - Uninstall debugging
-                    try
-                    {
-                        var pluginsPath = ApplicationPaths?.PluginsPath ?? UnknownPathPlaceholder;
-                        var version = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? DefaultVersionFallback;
-                        var versionedPluginPath = System.IO.Path.Combine(pluginsPath, $"{Name}_{version}");
-                        var logData = new { sessionId = DebugSessionId, runId = "run1", hypothesisId = "UNINSTALL-E", location = "Plugin.cs:600", message = "Dispose() cleanup complete", data = new { versionedFolderExists = System.IO.Directory.Exists(versionedPluginPath), versionedFolderPath = versionedPluginPath }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
-                        var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                        DebugLogHelper.SafeAppend( logJson);
-                    }
-                    catch
-                    {
-                        // Intentionally ignore: debug log must not impact Dispose cleanup.
-                    }
-                    // #endregion
+                    LogDisposeCompleteDebug();
                 }
                 else
                 {
@@ -776,6 +552,193 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
             }
             // #endregion
         }
+    }
+
+    private void LogPreCleanupPluginFolder()
+    {
+        try
+        {
+            var pluginsPath = ApplicationPaths?.PluginsPath ?? UnknownPathPlaceholder;
+            var version = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? DefaultVersionFallback;
+            var versionedPluginPath = System.IO.Path.Combine(pluginsPath, $"{Name}_{version}");
+            _logger?.LogDebug("[MR] Pre-cleanup: VersionedFolder exists={Exists}", System.IO.Directory.Exists(versionedPluginPath));
+            if (!System.IO.Directory.Exists(versionedPluginPath))
+                return;
+            var dllPath = System.IO.Path.Combine(versionedPluginPath, "Jellyfin.Plugin.MetadataRenamer.dll");
+            if (System.IO.File.Exists(dllPath))
+            {
+                try
+                {
+                    using (var fs = System.IO.File.Open(dllPath, System.IO.FileMode.Open, System.IO.FileAccess.Read, System.IO.FileShare.ReadWrite))
+                        _ = fs.Length;
+                }
+                catch (Exception fileEx)
+                {
+                    _logger?.LogWarning(fileEx, "[MR] DLL File appears to be locked: {Message}", fileEx.Message);
+                }
+            }
+            else
+            {
+                _logger?.LogWarning("[MR] DLL file not found at expected path: {Path}", dllPath);
+            }
+            try
+            {
+                var files = System.IO.Directory.GetFiles(versionedPluginPath);
+                _logger?.LogDebug("[MR] Plugin folder files: {Count}", files.Length);
+            }
+            catch (Exception listEx)
+            {
+                _logger?.LogWarning(listEx, "[MR] Could not list files in plugin folder");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "[MR] Could not check plugin folder path");
+        }
+    }
+
+    private void UnsubscribeFromLibraryEvents()
+    {
+        try
+        {
+            try
+            {
+                var logData = new { sessionId = DebugSessionId, runId = "run1", hypothesisId = "UNINSTALL-C", location = "Plugin.cs:550", message = "Unsubscribing from events", data = new { libraryManagerExists = _libraryManager != null }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
+                DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(logData) + "\n");
+                _logger?.LogDebug("[MR] Unsubscribing from events");
+            }
+            catch { /* Intentionally ignore */ }
+            if (_libraryManager != null)
+            {
+                _libraryManager.ItemUpdated -= OnItemUpdated;
+                _logger?.LogDebug("[MR] Event handler unsubscribed");
+            }
+            else
+            {
+                _logger?.LogWarning("[MR] LibraryManager is null - cannot unsubscribe");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "[MR] ERROR unsubscribing from events: {Message}. {Stack}", ex.Message, ex.StackTrace ?? "N/A");
+            try
+            {
+                var logData = new { sessionId = DebugSessionId, runId = "run1", hypothesisId = "UNINSTALL-C", location = "Plugin.cs:565", message = "ERROR unsubscribing from events", data = new { error = ex.Message, stackTrace = ex.StackTrace, errorType = ex.GetType().FullName }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
+                DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(logData) + "\n");
+                _logger?.LogError("[MR] ERROR unsubscribing: {Error}", ex.Message);
+            }
+            catch { /* Intentionally ignore */ }
+        }
+    }
+
+    private void ClearServiceState()
+    {
+        try
+        {
+            _renameCoordinator?.ClearState();
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "[MR] ERROR clearing service references: {Message}", ex.Message);
+        }
+    }
+
+    private void ClearStaticInstance()
+    {
+        try
+        {
+            if (Instance == this)
+            {
+                DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(new { sessionId = DebugSessionId, runId = "run1", hypothesisId = "A", location = "Plugin.cs:186", message = "Clearing static Instance", data = new { }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
+                Instance = null;
+            }
+            else
+            {
+                _logger?.LogWarning("[MR] Static instance is not this instance - may have been cleared already");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "[MR] ERROR clearing static instance: {Message}", ex.Message);
+            DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(new { sessionId = DebugSessionId, runId = "run1", hypothesisId = "A", location = "Plugin.cs:195", message = "ERROR clearing instance", data = new { error = ex.Message }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
+        }
+    }
+
+    private void LogPostCleanupAndDiagnose()
+    {
+        try
+        {
+            var pluginsPath = ApplicationPaths?.PluginsPath ?? UnknownPathPlaceholder;
+            var version = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? DefaultVersionFallback;
+            var versionedPluginPath = System.IO.Path.Combine(pluginsPath, $"{Name}_{version}");
+            _logger?.LogDebug("[MR] Post-cleanup: VersionedFolder exists={Exists}", System.IO.Directory.Exists(versionedPluginPath));
+            if (!System.IO.Directory.Exists(versionedPluginPath))
+            {
+                _logger?.LogDebug("[MR] Versioned plugin folder does not exist");
+                return;
+            }
+            _logger?.LogWarning("[MR] ⚠️ Versioned plugin folder still exists after Dispose: {Path}", versionedPluginPath);
+            var dllPath = System.IO.Path.Combine(versionedPluginPath, "Jellyfin.Plugin.MetadataRenamer.dll");
+            if (System.IO.File.Exists(dllPath))
+            {
+                _logger?.LogWarning("[MR] DLL still exists: {Path}", dllPath);
+                TryLogDllStatusAndAttemptDelete(dllPath);
+            }
+            _logger?.LogError("[MR] Uninstall diagnostics: Plugin folder still exists at {Path}. Recommended fix: Stop Jellyfin, delete folder, then restart.", versionedPluginPath);
+            DiagnoseUninstallFailure(versionedPluginPath, dllPath);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "[MR] Could not check plugin folder path after cleanup");
+        }
+    }
+
+    private void TryLogDllStatusAndAttemptDelete(string dllPath)
+    {
+        try
+        {
+            var dllInfo = new System.IO.FileInfo(dllPath);
+            _logger?.LogDebug("[MR] DLL: Size={Size}, Modified={Modified}", dllInfo.Length, dllInfo.LastWriteTime);
+            try
+            {
+                using (var fs = System.IO.File.Open(dllPath, System.IO.FileMode.Open, System.IO.FileAccess.Read, System.IO.FileShare.ReadWrite))
+                    _logger?.LogDebug("[MR] DLL can be opened (may still be locked by Jellyfin)");
+                try
+                {
+                    System.IO.File.Delete(dllPath);
+                    _logger?.LogInformation("[MR] DLL file deleted successfully");
+                }
+                catch (System.UnauthorizedAccessException uaEx)
+                {
+                    _logger?.LogError(uaEx, "[MR] DLL delete failed (locked): {Message}", uaEx.Message);
+                }
+                catch (System.IO.IOException ioEx)
+                {
+                    _logger?.LogError(ioEx, "[MR] DLL delete failed (locked): {Message}", ioEx.Message);
+                }
+            }
+            catch (System.IO.IOException ioEx)
+            {
+                _logger?.LogError(ioEx, "[MR] DLL file is LOCKED and cannot be opened: {Message}", ioEx.Message);
+            }
+        }
+        catch (Exception fileEx)
+        {
+            _logger?.LogWarning(fileEx, "[MR] Could not check DLL file status");
+        }
+    }
+
+    private void LogDisposeCompleteDebug()
+    {
+        try
+        {
+            var pluginsPath = ApplicationPaths?.PluginsPath ?? UnknownPathPlaceholder;
+            var version = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? DefaultVersionFallback;
+            var versionedPluginPath = System.IO.Path.Combine(pluginsPath, $"{Name}_{version}");
+            var logData = new { sessionId = DebugSessionId, runId = "run1", hypothesisId = "UNINSTALL-E", location = "Plugin.cs:600", message = "Dispose() cleanup complete", data = new { versionedFolderExists = System.IO.Directory.Exists(versionedPluginPath), versionedFolderPath = versionedPluginPath }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
+            DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(logData) + "\n");
+        }
+        catch { /* Intentionally ignore */ }
     }
 
     /// <summary>
