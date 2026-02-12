@@ -11,6 +11,9 @@ namespace Jellyfin.Plugin.MetadataRenamer.Services;
 /// </summary>
 public static class SafeName
 {
+    /// <summary>Timeout for regex operations to mitigate ReDoS (S6444).</summary>
+    private static readonly TimeSpan RegexTimeout = TimeSpan.FromMilliseconds(500);
+
     /// <summary>
     /// Renders a series folder name using the specified format template.
     /// </summary>
@@ -66,9 +69,9 @@ public static class SafeName
         else
         {
             // Remove year-related placeholders and surrounding formatting
-            s = Regex.Replace(s, @"\s*\(\s*{Year}\s*\)", string.Empty, RegexOptions.IgnoreCase);
-            s = Regex.Replace(s, @"\s*-\s*{Year}", string.Empty, RegexOptions.IgnoreCase);
-            s = Regex.Replace(s, @"\s*{Year}\s*", string.Empty, RegexOptions.IgnoreCase);
+            s = Regex.Replace(s, @"\s*\(\s*{Year}\s*\)", string.Empty, RegexOptions.IgnoreCase, RegexTimeout);
+            s = Regex.Replace(s, @"\s*-\s*{Year}", string.Empty, RegexOptions.IgnoreCase, RegexTimeout);
+            s = Regex.Replace(s, @"\s*{Year}\s*", string.Empty, RegexOptions.IgnoreCase, RegexTimeout);
         }
         
         // Replace provider and ID
@@ -80,9 +83,9 @@ public static class SafeName
         if (!hasProviderId)
         {
             // Remove empty brackets like " []" or "[-]"
-            s = Regex.Replace(s, @"\s*\[\s*[-]?\s*\]", string.Empty, RegexOptions.IgnoreCase);
+            s = Regex.Replace(s, @"\s*\[\s*[-]?\s*\]", string.Empty, RegexOptions.IgnoreCase, RegexTimeout);
             // Remove trailing separator if it exists
-            s = Regex.Replace(s, @"\s*-\s*$", string.Empty);
+            s = Regex.Replace(s, @"\s*-\s*$", string.Empty, RegexOptions.None, RegexTimeout);
         }
 
         s = CollapseSpaces(s);
@@ -116,10 +119,10 @@ public static class SafeName
         {
             // Remove season name placeholder and surrounding separators if not available
             // This handles formats like "Season {Season:00} - {SeasonName}" -> "Season 07" (removes " - ")
-            s = Regex.Replace(s, @"\s*-\s*{SeasonName}", string.Empty, RegexOptions.IgnoreCase);
-            s = Regex.Replace(s, @"\s*–\s*{SeasonName}", string.Empty, RegexOptions.IgnoreCase); // En dash
-            s = Regex.Replace(s, @"\s*—\s*{SeasonName}", string.Empty, RegexOptions.IgnoreCase); // Em dash
-            s = Regex.Replace(s, @"\s*{SeasonName}\s*", string.Empty, RegexOptions.IgnoreCase); // Fallback for any remaining
+            s = Regex.Replace(s, @"\s*-\s*{SeasonName}", string.Empty, RegexOptions.IgnoreCase, RegexTimeout);
+            s = Regex.Replace(s, @"\s*–\s*{SeasonName}", string.Empty, RegexOptions.IgnoreCase, RegexTimeout); // En dash
+            s = Regex.Replace(s, @"\s*—\s*{SeasonName}", string.Empty, RegexOptions.IgnoreCase, RegexTimeout); // Em dash
+            s = Regex.Replace(s, @"\s*{SeasonName}\s*", string.Empty, RegexOptions.IgnoreCase, RegexTimeout); // Fallback for any remaining
         }
         
         // Replace season number
@@ -142,13 +145,13 @@ public static class SafeName
                 }
                 // Use the padding width to format the number (e.g., D2 for 2-digit padding)
                 return seasonNumber.Value.ToString($"D{paddingWidth}", CultureInfo.InvariantCulture);
-            }, RegexOptions.IgnoreCase);
+            }, RegexOptions.IgnoreCase, RegexTimeout);
             s = s.Replace("{Season}", seasonNumber.Value.ToString(CultureInfo.InvariantCulture), StringComparison.OrdinalIgnoreCase);
         }
         else
         {
             // Remove season-related placeholders
-            s = Regex.Replace(s, @"{Season:?\d*}", string.Empty, RegexOptions.IgnoreCase);
+            s = Regex.Replace(s, @"{Season:?\d*}", string.Empty, RegexOptions.IgnoreCase, RegexTimeout);
         }
         
         s = CollapseSpaces(s);
@@ -190,13 +193,13 @@ public static class SafeName
                 }
                 // Use the padding width to format the number (e.g., D2 for 2-digit padding)
                 return seasonNumber.Value.ToString($"D{paddingWidth}", CultureInfo.InvariantCulture);
-            }, RegexOptions.IgnoreCase);
+            }, RegexOptions.IgnoreCase, RegexTimeout);
             s = s.Replace("{Season}", seasonNumber.Value.ToString(CultureInfo.InvariantCulture), StringComparison.OrdinalIgnoreCase);
         }
         else
         {
             // Remove season-related placeholders
-            s = Regex.Replace(s, @"{Season:?\d*}", string.Empty, RegexOptions.IgnoreCase);
+            s = Regex.Replace(s, @"{Season:?\d*}", string.Empty, RegexOptions.IgnoreCase, RegexTimeout);
         }
         
         // Replace episode number
@@ -217,7 +220,7 @@ public static class SafeName
                 }
                 // Use the padding width to format the number (e.g., D2 for 2-digit padding)
                 return episodeNumber.Value.ToString($"D{paddingWidth}", CultureInfo.InvariantCulture);
-            }, RegexOptions.IgnoreCase);
+            }, RegexOptions.IgnoreCase, RegexTimeout);
             // Then replace simple {Episode} placeholder
             s = s.Replace("{Episode}", episodeNumber.Value.ToString(CultureInfo.InvariantCulture), StringComparison.OrdinalIgnoreCase);
         }
@@ -225,9 +228,9 @@ public static class SafeName
         {
             // Remove episode-related placeholders - need to match both {Episode:XX} and {Episode}
             // Match {Episode:XX} first (with colon and digits)
-            s = Regex.Replace(s, @"{Episode:\d+}", string.Empty, RegexOptions.IgnoreCase);
+            s = Regex.Replace(s, @"{Episode:\d+}", string.Empty, RegexOptions.IgnoreCase, RegexTimeout);
             // Then match simple {Episode}
-            s = Regex.Replace(s, @"{Episode}", string.Empty, RegexOptions.IgnoreCase);
+            s = Regex.Replace(s, @"{Episode}", string.Empty, RegexOptions.IgnoreCase, RegexTimeout);
         }
         
         // Replace episode title
@@ -241,9 +244,9 @@ public static class SafeName
         else
         {
             // Remove year-related placeholders
-            s = Regex.Replace(s, @"\s*\(\s*{Year}\s*\)", string.Empty, RegexOptions.IgnoreCase);
-            s = Regex.Replace(s, @"\s*-\s*{Year}", string.Empty, RegexOptions.IgnoreCase);
-            s = Regex.Replace(s, @"\s*{Year}\s*", string.Empty, RegexOptions.IgnoreCase);
+            s = Regex.Replace(s, @"\s*\(\s*{Year}\s*\)", string.Empty, RegexOptions.IgnoreCase, RegexTimeout);
+            s = Regex.Replace(s, @"\s*-\s*{Year}", string.Empty, RegexOptions.IgnoreCase, RegexTimeout);
+            s = Regex.Replace(s, @"\s*{Year}\s*", string.Empty, RegexOptions.IgnoreCase, RegexTimeout);
         }
         
         s = CollapseSpaces(s);
@@ -276,7 +279,7 @@ public static class SafeName
             return false;
         if (!seasonNumber.HasValue || !episodeNumber.HasValue)
             return true; // No metadata to validate against
-        var match = Regex.Match(desiredFileNameWithoutExtension, @"[Ss](\d+)[Ee](\d+)", RegexOptions.IgnoreCase);
+        var match = Regex.Match(desiredFileNameWithoutExtension, @"[Ss](\d+)[Ee](\d+)", RegexOptions.IgnoreCase, RegexTimeout);
         if (!match.Success || match.Groups.Count < 3)
             return true; // No SxxExx in format; cannot validate
         if (!int.TryParse(match.Groups[1].Value, out var s) || !int.TryParse(match.Groups[2].Value, out var e))
@@ -322,7 +325,7 @@ public static class SafeName
 
         // Try various patterns in order of specificity
         // Pattern 1: S##E## or s##e## (e.g., "S01E01", "s1e5")
-        var match = Regex.Match(fileName, @"[Ss](\d+)[Ee](\d+)", RegexOptions.IgnoreCase);
+        var match = Regex.Match(fileName, @"[Ss](\d+)[Ee](\d+)", RegexOptions.IgnoreCase, RegexTimeout);
         if (match.Success && match.Groups.Count >= 3)
         {
             if (int.TryParse(match.Groups[2].Value, out var epNum))
@@ -332,7 +335,7 @@ public static class SafeName
         }
 
         // Pattern 2: E## or e## (e.g., "E01", "e5")
-        match = Regex.Match(fileName, @"[Ee](\d+)", RegexOptions.IgnoreCase);
+        match = Regex.Match(fileName, @"[Ee](\d+)", RegexOptions.IgnoreCase, RegexTimeout);
         if (match.Success && match.Groups.Count >= 2)
         {
             if (int.TryParse(match.Groups[1].Value, out var epNum))
@@ -342,7 +345,7 @@ public static class SafeName
         }
 
         // Pattern 3: EP ## or ep ## or EP## or ep## (e.g., "EP 1", "ep 5", "EP01", "ep5")
-        match = Regex.Match(fileName, @"[Ee][Pp]\s*(\d+)", RegexOptions.IgnoreCase);
+        match = Regex.Match(fileName, @"[Ee][Pp]\s*(\d+)", RegexOptions.IgnoreCase, RegexTimeout);
         if (match.Success && match.Groups.Count >= 2)
         {
             if (int.TryParse(match.Groups[1].Value, out var epNum))
@@ -352,7 +355,7 @@ public static class SafeName
         }
 
         // Pattern 4: Episode ## or episode ## or Episode## or episode## (e.g., "Episode 1", "episode 5")
-        match = Regex.Match(fileName, @"[Ee]pisode\s*(\d+)", RegexOptions.IgnoreCase);
+        match = Regex.Match(fileName, @"[Ee]pisode\s*(\d+)", RegexOptions.IgnoreCase, RegexTimeout);
         if (match.Success && match.Groups.Count >= 2)
         {
             if (int.TryParse(match.Groups[1].Value, out var epNum))
@@ -363,7 +366,7 @@ public static class SafeName
 
         // Pattern 5: Just a number at the end or in the middle (e.g., "Angel Beats - 1", "Show 01")
         // Look for standalone numbers, prefer numbers at the end
-        match = Regex.Match(fileName, @"\b(\d{1,3})\b", RegexOptions.RightToLeft);
+        match = Regex.Match(fileName, @"\b(\d{1,3})\b", RegexOptions.RightToLeft, RegexTimeout);
         if (match.Success && match.Groups.Count >= 2)
         {
             if (int.TryParse(match.Groups[1].Value, out var epNum) && epNum > 0 && epNum <= 999)
@@ -389,7 +392,7 @@ public static class SafeName
             return null;
         }
 
-        var match = Regex.Match(fileName, @"[Ss](\d+)[Ee](\d+)", RegexOptions.IgnoreCase);
+        var match = Regex.Match(fileName, @"[Ss](\d+)[Ee](\d+)", RegexOptions.IgnoreCase, RegexTimeout);
         if (match.Success && match.Groups.Count >= 2 && int.TryParse(match.Groups[1].Value, out var seasonNum))
         {
             return seasonNum;
@@ -411,7 +414,7 @@ public static class SafeName
             return null;
         }
 
-        var matches = Regex.Matches(fileName, @"[Ss](\d+)[Ee](\d+)", RegexOptions.IgnoreCase);
+        var matches = Regex.Matches(fileName, @"[Ss](\d+)[Ee](\d+)", RegexOptions.IgnoreCase, RegexTimeout);
         int? maxSeason = null;
         foreach (Match m in matches)
         {
@@ -446,7 +449,7 @@ public static class SafeName
 
         // Remove repeated patterns like "S02E06 - S02E06 - S02E06 - ..."
         // This pattern can repeat multiple times
-        var repeatedPattern = new Regex(@"^([Ss]\d+[Ee]\d+\s*-\s*)+", RegexOptions.IgnoreCase);
+        var repeatedPattern = new Regex(@"^([Ss]\d+[Ee]\d+\s*-\s*)+", RegexOptions.IgnoreCase, RegexTimeout);
         title = repeatedPattern.Replace(title, string.Empty);
 
         // Remove S##E## - pattern from beginning (case-insensitive, flexible spacing)
@@ -454,38 +457,38 @@ public static class SafeName
         if (seasonNumber.HasValue && episodeNumber.HasValue)
         {
             // Try exact match first
-            var exactPattern = new Regex($@"^[Ss]{seasonNumber.Value}[Ee]{episodeNumber.Value}\s*-\s*", RegexOptions.IgnoreCase);
+            var exactPattern = new Regex($@"^[Ss]{seasonNumber.Value}[Ee]{episodeNumber.Value}\s*-\s*", RegexOptions.IgnoreCase, RegexTimeout);
             title = exactPattern.Replace(title, string.Empty);
 
             // Also try zero-padded versions
-            var paddedPattern = new Regex($@"^[Ss]{seasonNumber.Value:D2}[Ee]{episodeNumber.Value:D2}\s*-\s*", RegexOptions.IgnoreCase);
+            var paddedPattern = new Regex($@"^[Ss]{seasonNumber.Value:D2}[Ee]{episodeNumber.Value:D2}\s*-\s*", RegexOptions.IgnoreCase, RegexTimeout);
             title = paddedPattern.Replace(title, string.Empty);
         }
 
         // Remove generic S##E## - pattern (without specific numbers) from beginning
-        var genericPattern = new Regex(@"^[Ss]\d+[Ee]\d+\s*-\s*", RegexOptions.IgnoreCase);
+        var genericPattern = new Regex(@"^[Ss]\d+[Ee]\d+\s*-\s*", RegexOptions.IgnoreCase, RegexTimeout);
         title = genericPattern.Replace(title, string.Empty);
 
         // CRITICAL FIX: Remove embedded S##E## patterns (e.g., "One Piece_S10E575_", "SeriesName_S01E05")
         // These patterns can appear anywhere in the title, not just at the beginning
         // Pattern: SeriesName_S##E##_ or SeriesName_S##E## or _S##E##_ or _S##E##
-        var embeddedSeasonEpisodePattern = new Regex(@"[_\s]+[Ss]\d+[Ee]\d+[_\s]*", RegexOptions.IgnoreCase);
+        var embeddedSeasonEpisodePattern = new Regex(@"[_\s]+[Ss]\d+[Ee]\d+[_\s]*", RegexOptions.IgnoreCase, RegexTimeout);
         title = embeddedSeasonEpisodePattern.Replace(title, " ");
 
         // Remove series name + "Season X Dub Episode Y" patterns
         // Pattern: "Series Name Season X Dub Episode Y" or similar
-        var seriesSeasonPattern = new Regex(@"\s*Season\s+\d+\s+Dub\s+Episode\s+\d+.*$", RegexOptions.IgnoreCase);
+        var seriesSeasonPattern = new Regex(@"\s*Season\s+\d+\s+Dub\s+Episode\s+\d+.*$", RegexOptions.IgnoreCase, RegexTimeout);
         title = seriesSeasonPattern.Replace(title, string.Empty);
 
         // Remove "Episode X" or "Ep X" patterns at the end
-        var episodePattern = new Regex(@"\s*[Ee]pisode\s+\d+.*$", RegexOptions.IgnoreCase);
+        var episodePattern = new Regex(@"\s*[Ee]pisode\s+\d+.*$", RegexOptions.IgnoreCase, RegexTimeout);
         title = episodePattern.Replace(title, string.Empty);
 
         // Clean up any remaining separators at the beginning
-        title = Regex.Replace(title, @"^[\s\-–—]+", string.Empty);
+        title = Regex.Replace(title, @"^[\s\-–—]+", string.Empty, RegexOptions.None, RegexTimeout);
 
         // Clean up any remaining separators at the end
-        title = Regex.Replace(title, @"[\s\-–—]+$", string.Empty);
+        title = Regex.Replace(title, @"[\s\-–—]+$", string.Empty, RegexOptions.None, RegexTimeout);
 
         // Collapse multiple spaces
         title = CollapseSpaces(title);
@@ -554,9 +557,9 @@ public static class SafeName
         }
 
         // Match: "Season" followed by optional spaces and digits only (e.g., "Season 1", "Season 01", "Season1")
-        return Regex.IsMatch(seasonName.Trim(), @"^Season\s*\d+$", RegexOptions.IgnoreCase);
+        return Regex.IsMatch(seasonName.Trim(), @"^Season\s*\d+$", RegexOptions.IgnoreCase, RegexTimeout);
     }
 
     private static string CollapseSpaces(string s)
-        => Regex.Replace(s ?? string.Empty, @"\s+", " ").Trim();
+        => Regex.Replace(s ?? string.Empty, @"\s+", " ", RegexOptions.None, RegexTimeout).Trim();
 }
