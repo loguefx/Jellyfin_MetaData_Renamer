@@ -335,16 +335,7 @@ public class PathRenameService
                 _logger.LogInformation("[MR] [DEBUG] [SEASON-RENAME-SUCCESS] SeasonId={Id}, SeasonNumber={SeasonNumber}", 
                     season.Id, season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
                 
-                // Verify the rename
-                if (Directory.Exists(newFullPath))
-                {
-                    _logger.LogInformation("[MR] [DEBUG] [SEASON-RENAME-VERIFICATION] ✓ Verification: New folder exists at {Path}", newFullPath);
-                }
-                else
-                {
-                    _logger.LogError("[MR] [DEBUG] [SEASON-RENAME-VERIFICATION-FAILED] ✗ Verification FAILED: New folder does not exist after rename! Expected: {Path}, SeasonId={Id}", 
-                        newFullPath, season?.Id);
-                }
+                LogSeasonRenameVerification(newFullPath, season);
             }
             catch (Exception renameEx)
             {
@@ -379,6 +370,19 @@ public class PathRenameService
                 ex.GetType().FullName, ex.Message, season?.Id, season?.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
             _logger.LogError("[MR] [DEBUG] [SEASON-RENAME-ERROR-UNEXPECTED] Stack Trace: {StackTrace}", ex.StackTrace ?? "N/A");
             _logger.LogError("[MR] [DEBUG] [SEASON-RENAME-ERROR-UNEXPECTED] Inner Exception: {InnerException}", ex.InnerException?.Message ?? "N/A");
+        }
+    }
+
+    private void LogSeasonRenameVerification(string newFullPath, MediaBrowser.Controller.Entities.TV.Season season)
+    {
+        if (!Directory.Exists(newFullPath))
+        {
+            _logger.LogError("[MR] [DEBUG] [SEASON-RENAME-VERIFICATION-FAILED] ✗ Verification FAILED: New folder does not exist after rename! Expected: {Path}, SeasonId={Id}",
+                newFullPath, season?.Id);
+        }
+        else
+        {
+            _logger.LogInformation("[MR] [DEBUG] [SEASON-RENAME-VERIFICATION] ✓ Verification: New folder exists at {Path}", newFullPath);
         }
     }
 
