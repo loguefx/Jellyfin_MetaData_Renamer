@@ -751,172 +751,167 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
         try
         {
             _logger?.LogError("[MR] === Uninstall Failure Diagnostics ===");
-            
-            // Check 1: DLL file lock status
             if (!string.IsNullOrWhiteSpace(dllPath) && System.IO.File.Exists(dllPath))
-            {
-                _logger?.LogError("[MR] [DIAGNOSTIC-1] Checking DLL file lock status...");
-                try
-                {
-                    // Try to open with exclusive access to detect locks
-                    using (var fs = System.IO.File.Open(dllPath, System.IO.FileMode.Open, System.IO.FileAccess.ReadWrite, System.IO.FileShare.None))
-                    {
-                        _logger?.LogError("[MR] [DIAGNOSTIC-1] ✓ DLL file is NOT locked (can be opened exclusively)");
-                    }
-                }
-                catch (System.UnauthorizedAccessException uaEx)
-                {
-                    _logger?.LogError(uaEx, "[MR] [DIAGNOSTIC-1] ✗ DLL LOCKED (UnauthorizedAccessException: {Message}). CAUSE: .NET runtime (assembly still loaded). SOLUTION: Stop Jellyfin completely, then delete folder.", uaEx.Message);
-                }
-                catch (System.IO.IOException ioEx)
-                {
-                    _logger?.LogError(ioEx, "[MR] [DIAGNOSTIC-1] ✗ DLL LOCKED (IOException: {Message}). CAUSE: Jellyfin/antivirus/file indexing. SOLUTION: Stop Jellyfin, disable AV/indexing temporarily, then delete.", ioEx.Message);
-                }
-                catch (Exception ex)
-                {
-                    _logger?.LogError(ex, "[MR] [DIAGNOSTIC-1] ✗ Error checking DLL lock: {Message}", ex.Message);
-                }
-            }
-            
-            // Check 2: Folder permissions
-            _logger?.LogError("[MR] [DIAGNOSTIC-2] Checking folder permissions...");
-            try
-            {
-                var folderInfo = new System.IO.DirectoryInfo(pluginFolderPath);
-                _ = folderInfo.GetAccessControl();
-                _logger?.LogError("[MR] [DIAGNOSTIC-2] ✓ Folder permissions accessible");
-            }
-            catch (System.UnauthorizedAccessException uaEx)
-            {
-                _logger?.LogError(uaEx, "[MR] [DIAGNOSTIC-2] ✗ Folder permission issue ({Message}). CAUSE: Insufficient permissions. SOLUTION: Run Jellyfin as Administrator or grant full control to Jellyfin service account.", uaEx.Message);
-            }
-            catch (Exception ex)
-            {
-                _logger?.LogError(ex, "[MR] [DIAGNOSTIC-2] ✗ Error checking folder permissions: {Message}", ex.Message);
-            }
-            
-            // Check 3: Delete marker file
-            _logger?.LogError("[MR] [DIAGNOSTIC-3] Checking for deleteOnStartup marker...");
-            var deleteMarkerPath = System.IO.Path.Combine(pluginFolderPath, DeleteOnStartupMarkerFileName);
-            if (System.IO.File.Exists(deleteMarkerPath))
-            {
-                _logger?.LogError("[MR] [DIAGNOSTIC-3] ✓ Delete marker found: {Path}. Jellyfin has marked plugin for deletion on next startup.", deleteMarkerPath);
-            }
-            else
-            {
-                _logger?.LogError("[MR] [DIAGNOSTIC-3] ✗ Delete marker NOT found: {Path}. CAUSE: Uninstall may not have been triggered. SOLUTION: Uninstall again via Jellyfin UI or delete folder manually.", deleteMarkerPath);
-            }
-            
-            // Check 4: Files in folder
-            _logger?.LogError("[MR] [DIAGNOSTIC-4] Checking files in plugin folder...");
-            try
-            {
-                var files = System.IO.Directory.GetFiles(pluginFolderPath, "*", System.IO.SearchOption.AllDirectories);
-                _logger?.LogError("[MR] [DIAGNOSTIC-4] Found {Count} file(s) in folder", files.Length);
-                foreach (var file in files)
-                {
-                    try
-                    {
-                        var fileInfo = new System.IO.FileInfo(file);
-                        var fileName = System.IO.Path.GetFileName(file);
-                        _logger?.LogError("[MR] [DIAGNOSTIC-4]   - {FileName} ({Size} bytes, Attributes: {Attributes})", 
-                            fileName, fileInfo.Length, fileInfo.Attributes);
-                        
-                        // Try to check if file is locked
-                        try
-                        {
-                            using (var fs = System.IO.File.Open(file, System.IO.FileMode.Open, System.IO.FileAccess.Read, System.IO.FileShare.None))
-                            {
-                                _ = fs.Length; // S108: verify file is not locked
-                            }
-                        }
-                        catch (Exception lockEx)
-                        {
-                            _logger?.LogError(lockEx, "[MR] [DIAGNOSTIC-4]     ⚠️ File is LOCKED: {FileName}", fileName);
-                        }
-                    }
-                    catch (Exception fileEx)
-                    {
-                        _logger?.LogError(fileEx, "[MR] [DIAGNOSTIC-4]     ✗ Error checking file: {FileName}", System.IO.Path.GetFileName(file));
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger?.LogError(ex, "[MR] [DIAGNOSTIC-4] ✗ Error listing files: {Message}", ex.Message);
-            }
-            
-            // Check 5: Process locks (using handle.exe if available, or alternative method)
-            try
-            {
-                var currentProcess = System.Diagnostics.Process.GetCurrentProcess();
-                var processPath = currentProcess.MainModule?.FileName ?? "NULL";
-                _logger?.LogError("[MR] [DIAGNOSTIC-5] Checking process locks. Process: {Name} (PID: {Id}), Path: {Path}", currentProcess.ProcessName, currentProcess.Id, processPath);
-                var currentAssembly = System.Reflection.Assembly.GetExecutingAssembly();
-                var loadedAssemblies = System.AppDomain.CurrentDomain.GetAssemblies();
-                var ourAssembly = loadedAssemblies.FirstOrDefault(a => a.FullName == currentAssembly.FullName);
-                if (ourAssembly != null)
-                {
-                    _logger?.LogError("[MR] [DIAGNOSTIC-5] ✗ Assembly still loaded. CAUSE: .NET cannot unload without AppDomain. SOLUTION: Jellyfin must restart to unload.");
-                }
-                else
-                {
-                    _logger?.LogError("[MR] [DIAGNOSTIC-5] ✓ Assembly not in current AppDomain (may have been unloaded)");
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger?.LogError(ex, "[MR] [DIAGNOSTIC-5] ✗ Error checking process locks: {Message}", ex.Message);
-            }
-            
-            // Check 6: Antivirus or file indexing (heuristic check)
-            _logger?.LogError("[MR] [DIAGNOSTIC-6] Checking for external locks (antivirus/file indexing)...");
-            try
-            {
-                // Try to rename the DLL to detect external locks
-                if (!string.IsNullOrWhiteSpace(dllPath) && System.IO.File.Exists(dllPath))
-                {
-                    var tempName = dllPath + ".tmp";
-                    var renamed = false;
-                    try
-                    {
-                        // Try to rename (this will fail if file is locked)
-                        System.IO.File.Move(dllPath, tempName);
-                        renamed = true;
-                        // Immediately rename back
-                        System.IO.File.Move(tempName, dllPath);
-                        _logger?.LogError("[MR] [DIAGNOSTIC-6] ✓ DLL can be renamed (no external locks detected)");
-                    }
-                    catch (System.UnauthorizedAccessException uaEx)
-                    {
-                        // If we renamed it, rename it back first
-                        if (renamed && System.IO.File.Exists(tempName))
-                        {
-                            try { System.IO.File.Move(tempName, dllPath); } catch (Exception restoreEx) { _ = restoreEx; /* Intentionally ignore: best-effort restore on diagnostic failure */ }
-                        }
-                        _logger?.LogError(uaEx, "[MR] [DIAGNOSTIC-6] ✗ DLL cannot be renamed (antivirus/file indexing?). CAUSE: External process. SOLUTION: Disable antivirus/indexing temporarily, then delete folder.");
-                    }
-                    catch (System.IO.IOException ioEx)
-                    {
-                        // If we renamed it, rename it back first
-                        if (renamed && System.IO.File.Exists(tempName))
-                        {
-                            try { System.IO.File.Move(tempName, dllPath); } catch { /* Intentionally ignore: best-effort restore on diagnostic failure */ }
-                        }
-                        _logger?.LogError(ioEx, "[MR] [DIAGNOSTIC-6] ✗ DLL cannot be renamed ({Message}). File is locked by another process.", ioEx.Message);
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger?.LogError(ex, "[MR] [DIAGNOSTIC-6] ✗ Error checking external locks: {Message}", ex.Message);
-            }
-            
+                DiagnoseDllLockStatus(dllPath);
+            DiagnoseFolderPermissions(pluginFolderPath);
+            DiagnoseDeleteMarker(pluginFolderPath);
+            DiagnoseFilesInFolder(pluginFolderPath);
+            DiagnoseProcessLocks();
+            DiagnoseExternalLocks(dllPath);
             _logger?.LogError("[MR] === End Uninstall Failure Diagnostics ===");
         }
         catch (Exception ex)
         {
             _logger?.LogError(ex, "[MR] ERROR in DiagnoseUninstallFailure: {Message}", ex.Message);
+        }
+    }
+
+    private void DiagnoseDllLockStatus(string dllPath)
+    {
+        _logger?.LogError("[MR] [DIAGNOSTIC-1] Checking DLL file lock status...");
+        try
+        {
+            using (var fs = System.IO.File.Open(dllPath, System.IO.FileMode.Open, System.IO.FileAccess.ReadWrite, System.IO.FileShare.None))
+                _logger?.LogError("[MR] [DIAGNOSTIC-1] ✓ DLL file is NOT locked (can be opened exclusively)");
+        }
+        catch (System.UnauthorizedAccessException uaEx)
+        {
+            _logger?.LogError(uaEx, "[MR] [DIAGNOSTIC-1] ✗ DLL LOCKED (UnauthorizedAccessException: {Message}). CAUSE: .NET runtime (assembly still loaded). SOLUTION: Stop Jellyfin completely, then delete folder.", uaEx.Message);
+        }
+        catch (System.IO.IOException ioEx)
+        {
+            _logger?.LogError(ioEx, "[MR] [DIAGNOSTIC-1] ✗ DLL LOCKED (IOException: {Message}). CAUSE: Jellyfin/antivirus/file indexing. SOLUTION: Stop Jellyfin, disable AV/indexing temporarily, then delete.", ioEx.Message);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "[MR] [DIAGNOSTIC-1] ✗ Error checking DLL lock: {Message}", ex.Message);
+        }
+    }
+
+    private void DiagnoseFolderPermissions(string pluginFolderPath)
+    {
+        _logger?.LogError("[MR] [DIAGNOSTIC-2] Checking folder permissions...");
+        try
+        {
+            var folderInfo = new System.IO.DirectoryInfo(pluginFolderPath);
+            _ = folderInfo.GetAccessControl();
+            _logger?.LogError("[MR] [DIAGNOSTIC-2] ✓ Folder permissions accessible");
+        }
+        catch (System.UnauthorizedAccessException uaEx)
+        {
+            _logger?.LogError(uaEx, "[MR] [DIAGNOSTIC-2] ✗ Folder permission issue ({Message}). CAUSE: Insufficient permissions. SOLUTION: Run Jellyfin as Administrator or grant full control to Jellyfin service account.", uaEx.Message);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "[MR] [DIAGNOSTIC-2] ✗ Error checking folder permissions: {Message}", ex.Message);
+        }
+    }
+
+    private void DiagnoseDeleteMarker(string pluginFolderPath)
+    {
+        _logger?.LogError("[MR] [DIAGNOSTIC-3] Checking for deleteOnStartup marker...");
+        var deleteMarkerPath = System.IO.Path.Combine(pluginFolderPath, DeleteOnStartupMarkerFileName);
+        if (System.IO.File.Exists(deleteMarkerPath))
+            _logger?.LogError("[MR] [DIAGNOSTIC-3] ✓ Delete marker found: {Path}. Jellyfin has marked plugin for deletion on next startup.", deleteMarkerPath);
+        else
+            _logger?.LogError("[MR] [DIAGNOSTIC-3] ✗ Delete marker NOT found: {Path}. CAUSE: Uninstall may not have been triggered. SOLUTION: Uninstall again via Jellyfin UI or delete folder manually.", deleteMarkerPath);
+    }
+
+    private void DiagnoseFilesInFolder(string pluginFolderPath)
+    {
+        _logger?.LogError("[MR] [DIAGNOSTIC-4] Checking files in plugin folder...");
+        try
+        {
+            var files = System.IO.Directory.GetFiles(pluginFolderPath, "*", System.IO.SearchOption.AllDirectories);
+            _logger?.LogError("[MR] [DIAGNOSTIC-4] Found {Count} file(s) in folder", files.Length);
+            foreach (var file in files)
+                DiagnoseSingleFile(file);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "[MR] [DIAGNOSTIC-4] ✗ Error listing files: {Message}", ex.Message);
+        }
+    }
+
+    private void DiagnoseSingleFile(string file)
+    {
+        try
+        {
+            var fileInfo = new System.IO.FileInfo(file);
+            var fileName = System.IO.Path.GetFileName(file);
+            _logger?.LogError("[MR] [DIAGNOSTIC-4]   - {FileName} ({Size} bytes, Attributes: {Attributes})", fileName, fileInfo.Length, fileInfo.Attributes);
+            try
+            {
+                using (var fs = System.IO.File.Open(file, System.IO.FileMode.Open, System.IO.FileAccess.Read, System.IO.FileShare.None))
+                    _ = fs.Length;
+            }
+            catch (Exception lockEx)
+            {
+                _logger?.LogError(lockEx, "[MR] [DIAGNOSTIC-4]     ⚠️ File is LOCKED: {FileName}", fileName);
+            }
+        }
+        catch (Exception fileEx)
+        {
+            _logger?.LogError(fileEx, "[MR] [DIAGNOSTIC-4]     ✗ Error checking file: {FileName}", System.IO.Path.GetFileName(file));
+        }
+    }
+
+    private void DiagnoseProcessLocks()
+    {
+        try
+        {
+            var currentProcess = System.Diagnostics.Process.GetCurrentProcess();
+            var processPath = currentProcess.MainModule?.FileName ?? "NULL";
+            _logger?.LogError("[MR] [DIAGNOSTIC-5] Checking process locks. Process: {Name} (PID: {Id}), Path: {Path}", currentProcess.ProcessName, currentProcess.Id, processPath);
+            var currentAssembly = System.Reflection.Assembly.GetExecutingAssembly();
+            var ourAssembly = System.AppDomain.CurrentDomain.GetAssemblies().FirstOrDefault(a => a.FullName == currentAssembly.FullName);
+            if (ourAssembly != null)
+                _logger?.LogError("[MR] [DIAGNOSTIC-5] ✗ Assembly still loaded. CAUSE: .NET cannot unload without AppDomain. SOLUTION: Jellyfin must restart to unload.");
+            else
+                _logger?.LogError("[MR] [DIAGNOSTIC-5] ✓ Assembly not in current AppDomain (may have been unloaded)");
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "[MR] [DIAGNOSTIC-5] ✗ Error checking process locks: {Message}", ex.Message);
+        }
+    }
+
+    private void DiagnoseExternalLocks(string? dllPath)
+    {
+        _logger?.LogError("[MR] [DIAGNOSTIC-6] Checking for external locks (antivirus/file indexing)...");
+        try
+        {
+            if (string.IsNullOrWhiteSpace(dllPath) || !System.IO.File.Exists(dllPath))
+                return;
+            var tempName = dllPath + ".tmp";
+            var renamed = false;
+            try
+            {
+                System.IO.File.Move(dllPath, tempName);
+                renamed = true;
+                System.IO.File.Move(tempName, dllPath);
+                _logger?.LogError("[MR] [DIAGNOSTIC-6] ✓ DLL can be renamed (no external locks detected)");
+            }
+            catch (System.UnauthorizedAccessException uaEx)
+            {
+                if (renamed && System.IO.File.Exists(tempName))
+                {
+                    try { System.IO.File.Move(tempName, dllPath); } catch (Exception restoreEx) { _ = restoreEx; }
+                }
+                _logger?.LogError(uaEx, "[MR] [DIAGNOSTIC-6] ✗ DLL cannot be renamed (antivirus/file indexing?). CAUSE: External process. SOLUTION: Disable antivirus/indexing temporarily, then delete folder.");
+            }
+            catch (System.IO.IOException ioEx)
+            {
+                if (renamed && System.IO.File.Exists(tempName))
+                {
+                    try { System.IO.File.Move(tempName, dllPath); } catch { }
+                }
+                _logger?.LogError(ioEx, "[MR] [DIAGNOSTIC-6] ✗ DLL cannot be renamed ({Message}). File is locked by another process.", ioEx.Message);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "[MR] [DIAGNOSTIC-6] ✗ Error checking external locks: {Message}", ex.Message);
         }
     }
 }
