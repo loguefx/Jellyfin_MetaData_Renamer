@@ -27,7 +27,6 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
 
     private readonly ILibraryManager _libraryManager;
     private readonly RenameCoordinator _renameCoordinator;
-    private readonly PathRenameService _pathRenameService;
     private readonly ILogger<Plugin> _logger;
     private readonly object _disposeLock = new object();
     private bool _disposed;
@@ -85,11 +84,11 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
             Instance = this;
             _libraryManager = libraryManager;
 
-            var logger = loggerFactory.CreateLogger<PathRenameService>();
-            _pathRenameService = new PathRenameService(logger);
+            var pathRenameServiceLogger = loggerFactory.CreateLogger<PathRenameService>();
+            var pathRenameService = new PathRenameService(pathRenameServiceLogger);
 
             var coordinatorLogger = loggerFactory.CreateLogger<RenameCoordinator>();
-            _renameCoordinator = new RenameCoordinator(coordinatorLogger, _pathRenameService, _libraryManager);
+            _renameCoordinator = new RenameCoordinator(coordinatorLogger, pathRenameService, _libraryManager);
 
             _libraryManager.ItemUpdated += OnItemUpdated;
             _logger.LogInformation("[MR] Plugin initialized successfully");
@@ -620,12 +619,11 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
         }
         catch (Exception ex)
         {
-            _logger?.LogError(ex, "[MR] ERROR unsubscribing from events: {Message}. {Stack}", ex.Message, ex.StackTrace ?? "N/A");
+            _logger.LogError(ex, "[MR] ERROR unsubscribing from events: {Message}. {Stack}", ex.Message, ex.StackTrace ?? "N/A");
             try
             {
                 var logData = new { sessionId = DebugSessionId, runId = "run1", hypothesisId = "UNINSTALL-C", location = "Plugin.cs:565", message = "ERROR unsubscribing from events", data = new { error = ex.Message, stackTrace = ex.StackTrace, errorType = ex.GetType().FullName }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
                 DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(logData) + "\n");
-                _logger?.LogError("[MR] ERROR unsubscribing: {Error}", ex.Message);
             }
             catch { /* Intentionally ignore */ }
         }

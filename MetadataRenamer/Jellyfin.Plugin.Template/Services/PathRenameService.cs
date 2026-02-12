@@ -12,6 +12,8 @@ namespace Jellyfin.Plugin.MetadataRenamer.Services;
 /// </summary>
 public class PathRenameService
 {
+    private const string DryRunLogMessage = "[MR] Dry Run: {DryRun}";
+
     private readonly ILogger<PathRenameService> _logger;
 
     /// <summary>
@@ -56,7 +58,7 @@ public class PathRenameService
             _logger.LogInformation("[MR] === TryRenameSeriesFolder Called ===");
             _logger.LogInformation("[MR] Series: {Name}, ID: {Id}", series.Name, series.Id);
             _logger.LogInformation("[MR] Desired Folder Name: {Desired}", desiredFolderName);
-            _logger.LogInformation("[MR] Dry Run: {DryRun}", dryRun);
+            _logger.LogInformation(DryRunLogMessage, dryRun);
 
             currentPath = series.Path;
             if (string.IsNullOrWhiteSpace(currentPath))
@@ -512,7 +514,7 @@ public class PathRenameService
             _logger.LogWarning("[MR] Episode: {Name}, ID: {Id}", episode.Name, episode.Id);
             _logger.LogWarning("[MR] Season: {Season}, Episode: {Episode} (Season2Plus={IsSeason2Plus})", seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", isSeason2Plus);
             _logger.LogWarning("[MR] Desired File Name: {Desired}", desiredFileName + fileExtension);
-            _logger.LogWarning("[MR] Dry Run: {DryRun}", dryRun);
+            _logger.LogWarning(DryRunLogMessage, dryRun);
         }
         else
         {
@@ -520,7 +522,7 @@ public class PathRenameService
             _logger.LogInformation("[MR] Episode: {Name}, ID: {Id}", episode.Name, episode.Id);
             _logger.LogInformation("[MR] Season: {Season}, Episode: {Episode}", seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
             _logger.LogInformation("[MR] Desired File Name: {Desired}", desiredFileName + fileExtension);
-            _logger.LogInformation("[MR] Dry Run: {DryRun}", dryRun);
+            _logger.LogInformation(DryRunLogMessage, dryRun);
         }
         if (isSeason2Plus)
         {
@@ -662,7 +664,7 @@ public class PathRenameService
             _logger.LogInformation("[MR] === TryRenameMovieFolder Called ===");
             _logger.LogInformation("[MR] Movie: {Name}, ID: {Id}", movie.Name, movie.Id);
             _logger.LogInformation("[MR] Desired Folder Name: {Desired}", desiredFolderName);
-            _logger.LogInformation("[MR] Dry Run: {DryRun}", dryRun);
+            _logger.LogInformation(DryRunLogMessage, dryRun);
 
             var movieFilePath = movie.Path;
             if (string.IsNullOrWhiteSpace(movieFilePath))
