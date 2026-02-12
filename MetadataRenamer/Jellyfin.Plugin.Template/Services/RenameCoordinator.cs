@@ -2353,8 +2353,8 @@ public class RenameCoordinator
                     // Track which season this episode belongs to
                     if (seasonNumber >= 0)
                     {
-                        _logger.LogWarning("[MR] [DEBUG] [ALL-SEASONS-PROCESSING] Processing episode from Season {Season}: {Name} (S{Season}E{Episode}) (Season2Plus={IsSeason2Plus})", 
-                            seasonNumber, episodeName, seasonNum, episodeNum, isSeason2Plus);
+                        _logger.LogWarning("[MR] [DEBUG] [ALL-SEASONS-PROCESSING] Processing episode from Season {SeasonNum}: {Name} (S{SeasonSxe}E{Episode}) (Season2Plus={IsSeason2Plus})", 
+                            seasonNum, episodeName, seasonNum, episodeNum, isSeason2Plus);
                         
                         // #region agent log - MULTI-SEASON-EPISODE-PROCESSING: Track Season 2+ episode processing
                         if (isSeason2Plus)
@@ -4002,13 +4002,13 @@ public class RenameCoordinator
             // We use IndexNumber for the season number and Name for the season name.
             if (!string.IsNullOrWhiteSpace(seasonName))
             {
-                _logger.LogInformation("[MR] [SEASON-NAME] Season {Season} has name: '{SeasonName}' (will render as 'Season {Season:00} - {SeasonName}')", 
-                    seasonNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture), seasonName);
+                _logger.LogInformation("[MR] [SEASON-NAME] Season {SeasonNum} has name: '{SeasonNameVal}' (will render as 'Season {RenderSeason:00} - {RenderName}')", 
+                    seasonNumber.Value, seasonName, seasonNumber.Value, seasonName);
             }
             else
             {
-                _logger.LogInformation("[MR] [SEASON-NAME] Season {Season} has no name (will render as 'Season {Season:00}' only)", 
-                    seasonNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                _logger.LogInformation("[MR] [SEASON-NAME] Season {SeasonNum} has no name (will render as 'Season {RenderSeason:00}' only)", 
+                    seasonNumber.Value, seasonNumber.Value);
             }
             
             _logger.LogInformation("[MR] [DEBUG] [SEASON-METADATA-VALIDATION] Season metadata validated: SeasonNumber={SeasonNumber}, SeasonName={SeasonName}", 
