@@ -8,7 +8,7 @@ SOURCE_URL="${2:-https://raw.githubusercontent.com/loguefx/Jellyfin_MetaData_Ren
 echo "Generating manifest.json..."
 
 # Check if DLL exists
-if [ ! -f "$DLL_PATH" ]; then
+if [[ ! -f "$DLL_PATH" ]]; then
     echo "Error: DLL not found at $DLL_PATH"
     echo "Please build the plugin first: dotnet build -c Release"
     exit 1

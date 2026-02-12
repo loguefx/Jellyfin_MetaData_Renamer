@@ -5331,10 +5331,10 @@ public class RenameCoordinator
         }
         catch (Exception ex)
         {
-            var seasonNum = episode.ParentIndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL";
-            var episodeNum = episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL";
+            var seasonNum = episode?.ParentIndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL";
+            var episodeNum = episode?.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL";
             _logger.LogError(ex, "[MR] ERROR in HandleEpisodeUpdate for episode {EpisodeName} (S{Season}E{Episode}, ID: {EpisodeId}): {Message}", 
-                episode.Name ?? "Unknown", seasonNum, episodeNum, episode.Id, ex.Message);
+                episode?.Name ?? "Unknown", seasonNum, episodeNum, episode?.Id, ex.Message);
             _logger.LogError("[MR] Stack Trace: {StackTrace}", ex.StackTrace ?? "N/A");
         }
     }

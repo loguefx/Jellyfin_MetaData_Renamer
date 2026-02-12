@@ -86,61 +86,8 @@ public class PathRenameService
 
             _logger.LogInformation("[MR] Parent Directory: {Parent}", parent.FullName);
 
-            // Check if folder name matches desired name
-            if (string.Equals(currentDir.Name, desiredFolderName, StringComparison.OrdinalIgnoreCase))
-            {
-                // Even if the folder name matches, check if the provider ID in the folder name matches the metadata
-                // This helps catch cases where Jellyfin provided wrong metadata initially
-                var providerIdFromFolder = ExtractProviderIdFromFolderName(currentDir.Name);
-                var providerIdFromMetadata = ExtractProviderIdFromDesiredName(desiredFolderName);
-                
-                // Also check if the folder's provider ID matches ANY of the provider IDs in the series metadata
-                // This helps catch cases where Jellyfin has multiple provider IDs but the folder has a different one
-                bool folderIdMatchesAnyMetadataId = false;
-                if (!string.IsNullOrWhiteSpace(providerIdFromFolder) && series.ProviderIds != null && series.ProviderIds.Count > 0)
-                {
-                    foreach (var kv in series.ProviderIds)
-                    {
-                        var metadataProviderId = $"{kv.Key.ToLowerInvariant()}-{kv.Value}";
-                        if (string.Equals(providerIdFromFolder, metadataProviderId, StringComparison.OrdinalIgnoreCase))
-                        {
-                            folderIdMatchesAnyMetadataId = true;
-                            break;
-                        }
-                    }
-                }
-                
-                if (!string.IsNullOrWhiteSpace(providerIdFromFolder) && 
-                    !string.IsNullOrWhiteSpace(providerIdFromMetadata) &&
-                    !string.Equals(providerIdFromFolder, providerIdFromMetadata, StringComparison.OrdinalIgnoreCase))
-                {
-                    _logger.LogWarning("[MR] ⚠️ Folder name matches but provider ID mismatch detected!");
-                    _logger.LogWarning("[MR] ⚠️ Provider ID in folder name: {FolderId}", providerIdFromFolder);
-                    _logger.LogWarning("[MR] ⚠️ Provider ID in metadata (selected): {MetadataId}", providerIdFromMetadata);
-                    _logger.LogWarning("[MR] ⚠️ Forcing re-rename to correct provider ID mismatch");
-                    // Continue with rename to fix the mismatch
-                }
-                else if (!string.IsNullOrWhiteSpace(providerIdFromFolder) && !folderIdMatchesAnyMetadataId)
-                {
-                    _logger.LogWarning("[MR] ⚠️ Folder name matches but provider ID in folder doesn't match ANY metadata provider ID!");
-                    _logger.LogWarning("[MR] ⚠️ Provider ID in folder name: {FolderId}", providerIdFromFolder);
-                    _logger.LogWarning("[MR] ⚠️ All metadata provider IDs: {AllIds}", 
-                        series.ProviderIds != null 
-                            ? string.Join(", ", series.ProviderIds.Select(kv => $"{kv.Key.ToLowerInvariant()}-{kv.Value}"))
-                            : "NONE");
-                    _logger.LogWarning("[MR] ⚠️ Forcing re-rename to correct provider ID mismatch");
-                    // Continue with rename to fix the mismatch
-                }
-                else
-                {
-                    _logger.LogInformation("[MR] SKIP: Folder name already matches desired name. Current: {Current}, Desired: {Desired}", currentDir.Name, desiredFolderName);
-                    if (!string.IsNullOrWhiteSpace(providerIdFromFolder) && !string.IsNullOrWhiteSpace(providerIdFromMetadata))
-                    {
-                        _logger.LogInformation("[MR] Provider IDs match: {Id}", providerIdFromFolder);
-                    }
-                    return false;
-                }
-            }
+            if (ShouldSkipSeriesRenameBecauseNameMatches(series, currentDir, desiredFolderName))
+                return false;
 
             newFullPath = Path.Combine(parent.FullName, desiredFolderName);
             _logger.LogInformation("[MR] New Full Path: {NewPath}", newFullPath);
@@ -178,18 +125,13 @@ public class PathRenameService
             _logger.LogInformation("[MR] ✓✓✓ SUCCESS: Folder renamed successfully!");
             _logger.LogInformation("[MR] Old: {From}", currentPath);
             _logger.LogInformation("[MR] New: {To}", newFullPath);
-            
-            // Verify the rename
-            if (Directory.Exists(newFullPath))
-            {
-                _logger.LogInformation("[MR] ✓ Verification: New folder exists");
-                return true;
-            }
-            else
+            if (!Directory.Exists(newFullPath))
             {
                 _logger.LogError("[MR] ✗ Verification FAILED: New folder does not exist after rename!");
                 return false;
             }
+            _logger.LogInformation("[MR] ✓ Verification: New folder exists");
+            return true;
         }
         catch (UnauthorizedAccessException ex)
         {
@@ -221,6 +163,61 @@ public class PathRenameService
             _logger.LogError("[MR] Stack Trace: {StackTrace}", ex.StackTrace ?? "N/A");
             return false;
         }
+    }
+
+    /// <summary>
+    /// Decides whether to skip series rename because folder name already matches (and provider IDs agree).
+    /// Returns true to skip, false to proceed (either name differs or we should force re-rename for provider ID mismatch).
+    /// </summary>
+    private bool ShouldSkipSeriesRenameBecauseNameMatches(Series series, DirectoryInfo currentDir, string desiredFolderName)
+    {
+        if (!string.Equals(currentDir.Name, desiredFolderName, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var providerIdFromFolder = ExtractProviderIdFromFolderName(currentDir.Name);
+        var providerIdFromMetadata = ExtractProviderIdFromDesiredName(desiredFolderName);
+        bool folderIdMatchesAnyMetadataId = FolderProviderIdMatchesAnyMetadataId(series, providerIdFromFolder);
+
+        if (!string.IsNullOrWhiteSpace(providerIdFromFolder) &&
+            !string.IsNullOrWhiteSpace(providerIdFromMetadata) &&
+            !string.Equals(providerIdFromFolder, providerIdFromMetadata, StringComparison.OrdinalIgnoreCase))
+        {
+            _logger.LogWarning("[MR] ⚠️ Folder name matches but provider ID mismatch detected!");
+            _logger.LogWarning("[MR] ⚠️ Provider ID in folder name: {FolderId}", providerIdFromFolder);
+            _logger.LogWarning("[MR] ⚠️ Provider ID in metadata (selected): {MetadataId}", providerIdFromMetadata);
+            _logger.LogWarning("[MR] ⚠️ Forcing re-rename to correct provider ID mismatch");
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(providerIdFromFolder) && !folderIdMatchesAnyMetadataId)
+        {
+            _logger.LogWarning("[MR] ⚠️ Folder name matches but provider ID in folder doesn't match ANY metadata provider ID!");
+            _logger.LogWarning("[MR] ⚠️ Provider ID in folder name: {FolderId}", providerIdFromFolder);
+            _logger.LogWarning("[MR] ⚠️ All metadata provider IDs: {AllIds}",
+                series.ProviderIds != null
+                    ? string.Join(", ", series.ProviderIds.Select(kv => $"{kv.Key.ToLowerInvariant()}-{kv.Value}"))
+                    : "NONE");
+            _logger.LogWarning("[MR] ⚠️ Forcing re-rename to correct provider ID mismatch");
+            return false;
+        }
+
+        _logger.LogInformation("[MR] SKIP: Folder name already matches desired name. Current: {Current}, Desired: {Desired}", currentDir.Name, desiredFolderName);
+        if (!string.IsNullOrWhiteSpace(providerIdFromFolder) && !string.IsNullOrWhiteSpace(providerIdFromMetadata))
+            _logger.LogInformation("[MR] Provider IDs match: {Id}", providerIdFromFolder);
+        return true;
+    }
+
+    private static bool FolderProviderIdMatchesAnyMetadataId(Series series, string? providerIdFromFolder)
+    {
+        if (string.IsNullOrWhiteSpace(providerIdFromFolder) || series.ProviderIds == null || series.ProviderIds.Count == 0)
+            return false;
+        foreach (var kv in series.ProviderIds)
+        {
+            var metadataProviderId = $"{kv.Key.ToLowerInvariant()}-{kv.Value}";
+            if (string.Equals(providerIdFromFolder, metadataProviderId, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
     }
 
     /// <summary>
