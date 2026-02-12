@@ -156,93 +156,16 @@ public class RenameCoordinator
             _logger.LogInformation("[MR] [DEBUG] === Processing Episode Retry Queue ===");
             _logger.LogInformation("[MR] [DEBUG] Episodes in queue: {Count}", _episodeRetryQueue.Count);
             _logger.LogInformation("[MR] [DEBUG] Current time: {Now}", now.ToString("yyyy-MM-dd HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture));
-
-            var episodesToRetry = new List<Guid>();
-            var episodesToRemove = new List<Guid>();
-
             _logger.LogInformation("[MR] [DEBUG] Evaluating {Count} episodes in queue", _episodeRetryQueue.Count);
-            
-            foreach (var kvp in _episodeRetryQueue.ToList())
-            {
-                var episodeId = kvp.Key;
-                var lastRetry = kvp.Value;
-                var retryCount = _episodeRetryCount.GetValueOrDefault(episodeId, 0);
-                var reason = _episodeRetryReason.GetValueOrDefault(episodeId, "Unknown");
 
-                // Check if enough time has passed since last retry
-                var timeSinceLastRetry = now - lastRetry;
-                var shouldRetry = timeSinceLastRetry.TotalMinutes >= RetryDelayMinutes;
+            var (episodesToRetry, episodesToRemove) = EvaluateRetryQueue(now);
+            RemoveFromRetryQueueBatch(episodesToRemove);
 
-                _logger.LogInformation("[MR] [DEBUG] Episode {Id}: Retry count={Count}/{Max}, Time since last retry={Minutes:F1} min, Should retry={ShouldRetry}", 
-                    episodeId, retryCount, MaxRetryAttempts, timeSinceLastRetry.TotalMinutes, shouldRetry);
-                _logger.LogInformation("[MR] [DEBUG] Episode {Id}: Reason={Reason}", episodeId, reason);
-
-                if (retryCount >= MaxRetryAttempts)
-                {
-                    _logger.LogWarning("[MR] [DEBUG] Removing episode {Id} from retry queue: Max retry attempts ({MaxAttempts}) reached", 
-                        episodeId, MaxRetryAttempts);
-                    episodesToRemove.Add(episodeId);
-                    continue;
-                }
-
-                if (shouldRetry)
-                {
-                    _logger.LogInformation("[MR] [DEBUG] Episode {Id} will be retried (enough time has passed)", episodeId);
-                    episodesToRetry.Add(episodeId);
-                }
-                else
-                {
-                    _logger.LogInformation("[MR] [DEBUG] Episode {Id} will not be retried yet (only {Minutes:F1} minutes since last retry, need {RequiredMinutes} minutes)", 
-                        episodeId, timeSinceLastRetry.TotalMinutes, RetryDelayMinutes);
-                }
-            }
-
-            // Remove episodes that exceeded max attempts
-            foreach (var episodeId in episodesToRemove)
-            {
-                _episodeRetryQueue.Remove(episodeId);
-                _episodeRetryCount.Remove(episodeId);
-                _episodeRetryReason.Remove(episodeId);
-            }
-
-            // Retry episodes
             if (episodesToRetry.Count > 0 && _libraryManager != null)
             {
                 _logger.LogInformation("[MR] [DEBUG] Retrying {Count} episodes from queue", episodesToRetry.Count);
-
-                foreach (var episodeId in episodesToRetry)
-                {
-                    try
-                    {
-                        _logger.LogInformation("[MR] [DEBUG] === Retrying Episode {Id} ===", episodeId);
-                        var item = _libraryManager.GetItemById(episodeId);
-                        if (item is Episode episode)
-                        {
-                            var retryCount = _episodeRetryCount.GetValueOrDefault(episodeId, 0);
-                            _episodeRetryCount[episodeId] = retryCount + 1;
-                            _episodeRetryQueue[episodeId] = now; // Update last retry time
-
-                            _logger.LogInformation("[MR] [DEBUG] Retry attempt {Attempt}/{MaxAttempts} for episode {Id}", 
-                                retryCount + 1, MaxRetryAttempts, episodeId);
-                            _logger.LogInformation("[MR] [DEBUG] Episode Name: {Name}", episode.Name ?? "NULL");
-                            _logger.LogInformation("[MR] [DEBUG] Episode Path: {Path}", episode.Path ?? "NULL");
-
-                            // Process the episode
-                            HandleEpisodeUpdate(episode, cfg, now, isBulkProcessing: false);
-
-                            _logger.LogInformation("[MR] [DEBUG] === Retry Attempt Complete for Episode {Id} ===", episodeId);
-                        }
-                        else
-                        {
-                            _logger.LogWarning("[MR] [DEBUG] Episode {Id} no longer exists or is not an Episode. Removing from queue.", episodeId);
-                            episodesToRemove.Add(episodeId);
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, "[MR] [DEBUG] Error retrying episode {Id}: {Message}", episodeId, ex.Message);
-                    }
-                }
+                ProcessRetryQueueBatch(episodesToRetry, cfg, now, out var additionalToRemove);
+                RemoveFromRetryQueueBatch(additionalToRemove);
             }
             else if (episodesToRetry.Count > 0 && _libraryManager == null)
             {
@@ -257,6 +180,89 @@ public class RenameCoordinator
         catch (Exception ex)
         {
             _logger.LogError(ex, "[MR] Error processing retry queue: {Message}", ex.Message);
+        }
+    }
+
+    private (List<Guid> toRetry, List<Guid> toRemove) EvaluateRetryQueue(DateTime now)
+    {
+        var toRetry = new List<Guid>();
+        var toRemove = new List<Guid>();
+        foreach (var kvp in _episodeRetryQueue.ToList())
+        {
+            var episodeId = kvp.Key;
+            var lastRetry = kvp.Value;
+            var retryCount = _episodeRetryCount.GetValueOrDefault(episodeId, 0);
+            var reason = _episodeRetryReason.GetValueOrDefault(episodeId, "Unknown");
+            var timeSinceLastRetry = now - lastRetry;
+            var shouldRetry = timeSinceLastRetry.TotalMinutes >= RetryDelayMinutes;
+
+            _logger.LogInformation("[MR] [DEBUG] Episode {Id}: Retry count={Count}/{Max}, Time since last retry={Minutes:F1} min, Should retry={ShouldRetry}", 
+                episodeId, retryCount, MaxRetryAttempts, timeSinceLastRetry.TotalMinutes, shouldRetry);
+            _logger.LogInformation("[MR] [DEBUG] Episode {Id}: Reason={Reason}", episodeId, reason);
+
+            if (retryCount >= MaxRetryAttempts)
+            {
+                _logger.LogWarning("[MR] [DEBUG] Removing episode {Id} from retry queue: Max retry attempts ({MaxAttempts}) reached", 
+                    episodeId, MaxRetryAttempts);
+                toRemove.Add(episodeId);
+                continue;
+            }
+
+            if (shouldRetry)
+            {
+                _logger.LogInformation("[MR] [DEBUG] Episode {Id} will be retried (enough time has passed)", episodeId);
+                toRetry.Add(episodeId);
+            }
+            else
+            {
+                _logger.LogInformation("[MR] [DEBUG] Episode {Id} will not be retried yet (only {Minutes:F1} minutes since last retry, need {RequiredMinutes} minutes)", 
+                    episodeId, timeSinceLastRetry.TotalMinutes, RetryDelayMinutes);
+            }
+        }
+        return (toRetry, toRemove);
+    }
+
+    private void RemoveFromRetryQueueBatch(IEnumerable<Guid> episodeIds)
+    {
+        foreach (var episodeId in episodeIds)
+        {
+            _episodeRetryQueue.Remove(episodeId);
+            _episodeRetryCount.Remove(episodeId);
+            _episodeRetryReason.Remove(episodeId);
+        }
+    }
+
+    private void ProcessRetryQueueBatch(IReadOnlyList<Guid> episodeIds, PluginConfiguration cfg, DateTime now, out List<Guid> toRemove)
+    {
+        toRemove = new List<Guid>();
+        foreach (var episodeId in episodeIds)
+        {
+            try
+            {
+                _logger.LogInformation("[MR] [DEBUG] === Retrying Episode {Id} ===", episodeId);
+                var item = _libraryManager.GetItemById(episodeId);
+                if (item is Episode episode)
+                {
+                    var retryCount = _episodeRetryCount.GetValueOrDefault(episodeId, 0);
+                    _episodeRetryCount[episodeId] = retryCount + 1;
+                    _episodeRetryQueue[episodeId] = now;
+                    _logger.LogInformation("[MR] [DEBUG] Retry attempt {Attempt}/{MaxAttempts} for episode {Id}", 
+                        retryCount + 1, MaxRetryAttempts, episodeId);
+                    _logger.LogInformation("[MR] [DEBUG] Episode Name: {Name}", episode.Name ?? "NULL");
+                    _logger.LogInformation("[MR] [DEBUG] Episode Path: {Path}", episode.Path ?? "NULL");
+                    HandleEpisodeUpdate(episode, cfg, now, isBulkProcessing: false);
+                    _logger.LogInformation("[MR] [DEBUG] === Retry Attempt Complete for Episode {Id} ===", episodeId);
+                }
+                else
+                {
+                    _logger.LogWarning("[MR] [DEBUG] Episode {Id} no longer exists or is not an Episode. Removing from queue.", episodeId);
+                    toRemove.Add(episodeId);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[MR] [DEBUG] Error retrying episode {Id}: {Message}", episodeId, ex.Message);
+            }
         }
     }
 
@@ -382,7 +388,6 @@ public class RenameCoordinator
     {
         try
         {
-            // Safeguard: reject null event or configuration
             if (e == null)
             {
                 _logger.LogWarning("[MR] [SAFEGUARD] HandleItemUpdated: ItemChangeEventArgs is null. Ignoring.");
@@ -394,13 +399,9 @@ public class RenameCoordinator
                 return;
             }
 
-            // Process retry queue first (before processing new items)
             ProcessRetryQueue(cfg, DateTime.UtcNow);
-            // #region agent log
             DebugLogHelper.SafeAppend( System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "C", location = "RenameCoordinator.cs:42", message = "HandleItemUpdated entry", data = new { itemType = e.Item?.GetType().Name ?? "null", itemName = e.Item?.Name ?? "null", enabled = cfg.Enabled, renameSeriesFolders = cfg.RenameSeriesFolders, dryRun = cfg.DryRun, requireProviderIdMatch = cfg.RequireProviderIdMatch, onlyRenameWhenProviderIdsChange = cfg.OnlyRenameWhenProviderIdsChange }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
-            // #endregion
-            
-            // Log all item updates with full details
+
             _logger.LogInformation("[MR] ===== ItemUpdated Event Received =====");
             _logger.LogInformation("[MR] Item Type: {Type}", e.Item?.GetType().Name ?? "NULL");
             _logger.LogInformation("[MR] Item Name: {Name}", e.Item?.Name ?? "NULL");
@@ -409,278 +410,228 @@ public class RenameCoordinator
                 "[MR] Configuration: Enabled={Enabled}, RenameSeriesFolders={RenameSeriesFolders}, RenameSeasonFolders={RenameSeasonFolders}, RenameEpisodeFiles={RenameEpisodeFiles}, RenameMovieFolders={RenameMovieFolders}, DryRun={DryRun}, RequireProviderIdMatch={RequireProviderIdMatch}, OnlyRenameWhenProviderIdsChange={OnlyRenameWhenProviderIdsChange}, ProcessDuringLibraryScans={ProcessDuringLibraryScans}",
                 cfg.Enabled, cfg.RenameSeriesFolders, cfg.RenameSeasonFolders, cfg.RenameEpisodeFiles, cfg.RenameMovieFolders, cfg.DryRun, cfg.RequireProviderIdMatch, cfg.OnlyRenameWhenProviderIdsChange, cfg.ProcessDuringLibraryScans);
 
-        if (!cfg.Enabled)
-        {
-                // #region agent log
+            if (!cfg.Enabled)
+            {
                 DebugLogHelper.SafeAppend( System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "D", location = "RenameCoordinator.cs:49", message = "Plugin disabled", data = new { itemType = e.Item?.GetType().Name ?? "null" }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
-                // #endregion
                 _logger.LogWarning("[MR] SKIP: Plugin is disabled in configuration");
-            return;
-        }
-
-        var now = DateTime.UtcNow;
-
-            // Handle Series items
-            if (e.Item is Series series)
-            {
-                // #region agent log - SERIES-ITEM-UPDATED: Track all series ItemUpdated events
-                try
-                {
-                    var logData = new { 
-                        runId = "run1", 
-                        hypothesisId = "SERIES-ITEM-UPDATED", 
-                        location = "RenameCoordinator.cs:406", 
-                        message = "Series ItemUpdated event received", 
-                        data = new { 
-                            seriesId = series.Id.ToString(),
-                            seriesName = series.Name ?? "NULL",
-                            seriesPath = series.Path ?? "NULL",
-                            providerIdsCount = series.ProviderIds?.Count ?? 0,
-                            providerIds = series.ProviderIds != null ? string.Join(",", series.ProviderIds.Select(kv => $"{kv.Key}={kv.Value}")) : "null"
-                        }, 
-                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() 
-                    };
-                    var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                    DebugLogHelper.SafeAppend( logJson);
-                    _logger.LogInformation("[MR] [DEBUG] [SERIES-ITEM-UPDATED] Series ItemUpdated: Id={Id}, Name='{Name}', Path={Path}, ProviderIds={ProviderIds}",
-                        series.Id, series.Name ?? "NULL", series.Path ?? "NULL",
-                        series.ProviderIds != null ? string.Join(",", series.ProviderIds.Select(kv => $"{kv.Key}={kv.Value}")) : "NONE");
-                }
-                catch (Exception ex)
-                {
-                    DebugLogHelper.SafeAppend( System.Text.Json.JsonSerializer.Serialize(new { runId = "run1", hypothesisId = "SERIES-ITEM-UPDATED", location = "RenameCoordinator.cs:406", message = "ERROR logging series event", data = new { error = ex.Message }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
-                }
-                // #endregion
-                
-                // Debounce global spam for Series items only
-                var timeSinceLastAction = now - _lastGlobalActionUtc;
-                if (timeSinceLastAction < _globalMinInterval)
-                {
-                    _logger.LogInformation("[MR] SKIP: Global debounce active. Time since last action: {Seconds} seconds (min: {MinSeconds})",
-                        timeSinceLastAction.TotalSeconds, _globalMinInterval.TotalSeconds);
-                    return;
-                }
-                _lastGlobalActionUtc = now;
-
-        if (!cfg.RenameSeriesFolders)
-        {
-                    _logger.LogInformation("[MR] SKIP: RenameSeriesFolders is disabled in configuration");
-                    return;
-                }
-                HandleSeriesUpdate(series, cfg, now);
-            return;
-        }
-
-            // Handle Season items
-            if (e.Item is Season season)
-            {
-                // #region agent log - SEASON-ITEM-UPDATED: Track all season ItemUpdated events
-                try
-                {
-                    _logger.LogInformation("[MR] [DEBUG] [SEASON-ITEM-UPDATED] Season ItemUpdated: Id={Id}, Name='{Name}', Path={Path}, SeasonNumber={SeasonNumber}, SeriesId={SeriesId}, SeriesName='{SeriesName}'",
-                        season.Id, season.Name ?? "NULL", season.Path ?? "NULL", 
-                        season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
-                        season.Series?.Id.ToString() ?? "NULL", season.Series?.Name ?? "NULL");
-                    
-                    var logData = new { 
-                        runId = "run1", 
-                        hypothesisId = "SEASON-ITEM-UPDATED", 
-                        location = "RenameCoordinator.cs:457", 
-                        message = "Season ItemUpdated event received", 
-                        data = new { 
-                            seasonId = season.Id.ToString(),
-                            seasonName = season.Name ?? "NULL",
-                            seasonPath = season.Path ?? "NULL",
-                            seasonNumber = season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
-                            seriesId = season.Series?.Id.ToString() ?? "NULL",
-                            seriesName = season.Series?.Name ?? "NULL",
-                            seriesPath = season.Series?.Path ?? "NULL"
-                        }, 
-                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() 
-                    };
-                    var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                    DebugLogHelper.SafeAppend( logJson);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "[MR] [DEBUG] [SEASON-ITEM-UPDATED] ERROR logging season event: {Error}", ex.Message);
-                }
-                // #endregion
-                
-                // Debounce global spam for Season items only
-                var timeSinceLastAction = now - _lastGlobalActionUtc;
-                if (timeSinceLastAction < _globalMinInterval)
-                {
-                    _logger.LogInformation("[MR] [DEBUG] [SEASON-SKIP-GLOBAL-DEBOUNCE] SKIP: Global debounce active. Time since last action: {Seconds} seconds (min: {MinSeconds})",
-                        timeSinceLastAction.TotalSeconds, _globalMinInterval.TotalSeconds);
-                    return;
-                }
-                _lastGlobalActionUtc = now;
-
-                if (!cfg.RenameSeasonFolders)
-                {
-                    _logger.LogInformation("[MR] [DEBUG] [SEASON-SKIP-CONFIG-DISABLED] SKIP: RenameSeasonFolders is disabled in configuration");
-                    return;
-                }
-                
-                // #region agent log - SEASON-PROCESSING-START: Track when season processing starts
-                try
-                {
-                    _logger.LogInformation("[MR] [DEBUG] [SEASON-PROCESSING-START] Starting HandleSeasonUpdate for Season: {Name}, ID: {Id}, SeasonNumber: {SeasonNumber}",
-                        season.Name ?? "NULL", season.Id, season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "[MR] [DEBUG] [SEASON-PROCESSING-START] ERROR logging season processing start: {Error}", ex.Message);
-                }
-                // #endregion
-                
-                HandleSeasonUpdate(season, cfg, now);
-                
-                // #region agent log - SEASON-PROCESSING-COMPLETE: Track when season processing completes
-                try
-                {
-                    _logger.LogInformation("[MR] [DEBUG] [SEASON-PROCESSING-COMPLETE] HandleSeasonUpdate completed for Season: {Name}, ID: {Id}",
-                        season.Name ?? "NULL", season.Id);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "[MR] [DEBUG] [SEASON-PROCESSING-COMPLETE] ERROR logging season processing complete: {Error}", ex.Message);
-                }
-                // #endregion
-                
-            return;
-        }
-
-            // Handle Episode items
-            if (e.Item is Episode episode)
-            {
-                // #region agent log - EPISODE-METADATA-DEBUG: Track episode metadata state when ItemUpdated fires
-                try
-                {
-                    var currentFileName = !string.IsNullOrWhiteSpace(episode.Path) ? Path.GetFileNameWithoutExtension(episode.Path) : "NULL";
-                    var isFilenamePattern = !string.IsNullOrWhiteSpace(episode.Name) && 
-                                           System.Text.RegularExpressions.Regex.IsMatch(episode.Name, @"[Ss]\d+[Ee]\d+", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-                    var logData = new { 
-                        runId = "run1", 
-                        hypothesisId = "EPISODE-METADATA", 
-                        location = "RenameCoordinator.cs:405", 
-                        message = "Episode ItemUpdated event - full metadata state", 
-                        data = new { 
-                            episodeId = episode.Id.ToString(), 
-                            episodeName = episode.Name ?? "NULL", 
-                            episodeNameIsFilenamePattern = isFilenamePattern,
-                            episodePath = episode.Path ?? "NULL",
-                            currentFileName = currentFileName,
-                            episodeIndexNumber = episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", 
-                            parentIndexNumber = episode.ParentIndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
-                            seriesName = episode.Series?.Name ?? "NULL",
-                            seriesId = episode.Series?.Id.ToString() ?? "NULL",
-                            seriesPath = episode.Series?.Path ?? "NULL",
-                            seriesHasProviderIds = episode.Series?.ProviderIds != null && episode.Series.ProviderIds.Count > 0
-                        }, 
-                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() 
-                    };
-                    var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                    DebugLogHelper.SafeAppend( logJson);
-                    _logger.LogInformation("[MR] [EPISODE-METADATA] Episode ItemUpdated: Id={Id}, Name='{Name}' (isPattern={IsPattern}), Path={Path}, S{Season}E{Episode}", 
-                        episode.Id, episode.Name ?? "NULL", isFilenamePattern, episode.Path ?? "NULL",
-                        episode.ParentIndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "??",
-                        episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "??");
-                }
-                catch (Exception ex)
-                {
-                    DebugLogHelper.SafeAppend( System.Text.Json.JsonSerializer.Serialize(new { runId = "run1", hypothesisId = "EPISODE-METADATA", location = "RenameCoordinator.cs:405", message = "ERROR logging episode metadata", data = new { error = ex.Message }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
-                }
-                // #endregion
-                
-                // #region agent log - MULTI-EPISODE-HYP-A: Track all episode ItemUpdated events
-                try
-                {
-                    var logData = new { sessionId = "debug-session", runId = "run1", hypothesisId = "MULTI-EP-A", location = "RenameCoordinator.cs:124", message = "Episode ItemUpdated event received", data = new { episodeId = episode.Id.ToString(), episodeName = episode.Name ?? "NULL", episodePath = episode.Path ?? "NULL", episodeIndexNumber = episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", parentIndexNumber = episode.ParentIndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", seriesName = episode.Series?.Name ?? "NULL", seriesPath = episode.Series?.Path ?? "NULL" }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
-                    var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                    DebugLogHelper.SafeAppend( logJson);
-                    _logger.LogInformation("[MR] [MULTI-EP-A] Episode ItemUpdated event: EpisodeId={Id}, Name={Name}, Path={Path}, IndexNumber={IndexNumber}", 
-                        episode.Id, episode.Name ?? "NULL", episode.Path ?? "NULL", episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
-                }
-                catch (Exception ex)
-                {
-                    DebugLogHelper.SafeAppend( System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "MULTI-EP-A", location = "RenameCoordinator.cs:124", message = "ERROR logging episode event", data = new { error = ex.Message }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
-                }
-                // #endregion
-                
-                // #region agent log - Hypothesis A: Check episode state immediately after cast
-                try
-                {
-                    var indexNumberImmediate = episode.IndexNumber;
-                    var parentIndexNumberImmediate = episode.ParentIndexNumber;
-                    var episodeTypeImmediate = episode.GetType().FullName;
-                    var logData = new { sessionId = "debug-session", runId = "run1", hypothesisId = "A", location = "RenameCoordinator.cs:124", message = "Episode cast successful - immediate IndexNumber check", data = new { episodeType = episodeTypeImmediate, indexNumber = indexNumberImmediate?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", parentIndexNumber = parentIndexNumberImmediate?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", episodeId = episode.Id.ToString(), episodeName = episode.Name ?? "NULL" }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
-                    var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                    DebugLogHelper.SafeAppend( logJson);
-                    _logger.LogInformation("[MR] [DEBUG-HYP-A] Episode cast: Type={Type}, IndexNumber={IndexNumber}, ParentIndexNumber={ParentIndexNumber}, Id={Id}, Name={Name}", 
-                        episodeTypeImmediate, indexNumberImmediate?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", 
-                        parentIndexNumberImmediate?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", episode.Id, episode.Name ?? "NULL");
-                }
-                catch (Exception ex)
-                {
-                    var logData = new { sessionId = "debug-session", runId = "run1", hypothesisId = "A", location = "RenameCoordinator.cs:124", message = "ERROR checking IndexNumber immediately after cast", data = new { error = ex.Message, episodeId = episode?.Id.ToString() ?? "NULL" }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
-                    var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                    DebugLogHelper.SafeAppend( logJson);
-                    _logger.LogError(ex, "[MR] [DEBUG-HYP-A] ERROR checking IndexNumber immediately after cast: {Error}", ex.Message);
-                }
-                // #endregion
-                
-                var seasonNumForLogging = episode.ParentIndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL";
-                var episodeNumForLogging = episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL";
-                
-                if (!cfg.RenameEpisodeFiles)
-                {
-                    // #region agent log - MULTI-EPISODE-HYP-B: Track episodes skipped due to config
-                    DebugLogHelper.SafeAppend( System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "MULTI-EP-B", location = "RenameCoordinator.cs:148", message = "Episode skipped - RenameEpisodeFiles disabled", data = new { episodeId = episode.Id.ToString(), episodeName = episode.Name ?? "NULL", seasonNumber = seasonNumForLogging, episodeNumber = episodeNumForLogging }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
-                    // #endregion
-                    _logger.LogInformation("[MR] [DEBUG] [EPISODE-SKIP-CONFIG-DISABLED] SKIP: RenameEpisodeFiles is disabled in configuration. Season={Season}, Episode={Episode}", seasonNumForLogging, episodeNumForLogging);
-                    _logger.LogInformation("[MR] ===== Episode Processing Complete (Skipped - Config Disabled) =====");
-                    return;
-                }
-                HandleEpisodeUpdate(episode, cfg, now);
                 return;
             }
 
-            // Handle Movie items
-            if (e.Item is Movie movie)
-            {
-                // Debounce global spam for Movie items only
-                var timeSinceLastAction = now - _lastGlobalActionUtc;
-                if (timeSinceLastAction < _globalMinInterval)
-                {
-                    _logger.LogInformation("[MR] SKIP: Global debounce active. Time since last action: {Seconds} seconds (min: {MinSeconds})",
-                        timeSinceLastAction.TotalSeconds, _globalMinInterval.TotalSeconds);
-                    return;
-                }
-                _lastGlobalActionUtc = now;
-
-                if (!cfg.RenameMovieFolders)
-                {
-                    _logger.LogInformation("[MR] SKIP: RenameMovieFolders is disabled in configuration");
-                    return;
-                }
-                HandleMovieUpdate(movie, cfg, now);
-                return;
-            }
-
-            // Skip other item types
-            _logger.LogInformation("[MR] SKIP: Item is not a Series, Season, Episode, or Movie. Type={Type}, Name={Name}", e.Item?.GetType().Name ?? "NULL", e.Item?.Name ?? "NULL");
-            return;
+            var now = DateTime.UtcNow;
+            DispatchItemUpdatedByType(e, cfg, now);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "[MR] CRITICAL ERROR in HandleItemUpdated: {Message}", ex.Message);
             _logger.LogError("[MR] Stack Trace: {StackTrace}", ex.StackTrace ?? "N/A");
-            // #region agent log
             DebugLogHelper.SafeAppend( System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "A", location = "RenameCoordinator.cs:252", message = "CRITICAL ERROR in HandleItemUpdated", data = new { error = ex.Message, stackTrace = ex.StackTrace }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
-            // #endregion
         }
+    }
+
+    private void DispatchItemUpdatedByType(ItemChangeEventArgs e, PluginConfiguration cfg, DateTime now)
+    {
+        if (e.Item is Series series)
+        {
+            HandleItemUpdatedSeries(series, cfg, now);
+            return;
+        }
+        if (e.Item is Season season)
+        {
+            HandleItemUpdatedSeason(season, cfg, now);
+            return;
+        }
+        if (e.Item is Episode episode)
+        {
+            HandleItemUpdatedEpisode(episode, cfg, now);
+            return;
+        }
+        if (e.Item is Movie movie)
+        {
+            HandleItemUpdatedMovie(movie, cfg, now);
+            return;
+        }
+
+            // Skip other item types
+            _logger.LogInformation("[MR] SKIP: Item is not a Series, Season, Episode, or Movie. Type={Type}, Name={Name}", e.Item?.GetType().Name ?? "NULL", e.Item?.Name ?? "NULL");
+    }
+
+    private void HandleItemUpdatedSeries(Series series, PluginConfiguration cfg, DateTime now)
+    {
+        try
+        {
+            var logData = new { runId = "run1", hypothesisId = "SERIES-ITEM-UPDATED", location = "RenameCoordinator.cs:406", message = "Series ItemUpdated event received", data = new { seriesId = series.Id.ToString(), seriesName = series.Name ?? "NULL", seriesPath = series.Path ?? "NULL", providerIdsCount = series.ProviderIds?.Count ?? 0, providerIds = series.ProviderIds != null ? string.Join(",", series.ProviderIds.Select(kv => $"{kv.Key}={kv.Value}")) : "null" }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
+            DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(logData) + "\n");
+            _logger.LogInformation("[MR] [DEBUG] [SERIES-ITEM-UPDATED] Series ItemUpdated: Id={Id}, Name='{Name}', Path={Path}, ProviderIds={ProviderIds}", series.Id, series.Name ?? "NULL", series.Path ?? "NULL", series.ProviderIds != null ? string.Join(",", series.ProviderIds.Select(kv => $"{kv.Key}={kv.Value}")) : "NONE");
+        }
+        catch (Exception ex)
+        {
+            DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(new { runId = "run1", hypothesisId = "SERIES-ITEM-UPDATED", location = "RenameCoordinator.cs:406", message = "ERROR logging series event", data = new { error = ex.Message }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
+        }
+        var timeSinceLastAction = now - _lastGlobalActionUtc;
+        if (timeSinceLastAction < _globalMinInterval)
+        {
+            _logger.LogInformation("[MR] SKIP: Global debounce active. Time since last action: {Seconds} seconds (min: {MinSeconds})", timeSinceLastAction.TotalSeconds, _globalMinInterval.TotalSeconds);
+            return;
+        }
+        _lastGlobalActionUtc = now;
+        if (!cfg.RenameSeriesFolders)
+        {
+            _logger.LogInformation("[MR] SKIP: RenameSeriesFolders is disabled in configuration");
+            return;
+        }
+        HandleSeriesUpdate(series, cfg, now);
+    }
+
+    private void HandleItemUpdatedSeason(Season season, PluginConfiguration cfg, DateTime now)
+    {
+        try
+        {
+            _logger.LogInformation("[MR] [DEBUG] [SEASON-ITEM-UPDATED] Season ItemUpdated: Id={Id}, Name='{Name}', Path={Path}, SeasonNumber={SeasonNumber}, SeriesId={SeriesId}, SeriesName='{SeriesName}'", season.Id, season.Name ?? "NULL", season.Path ?? "NULL", season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", season.Series?.Id.ToString() ?? "NULL", season.Series?.Name ?? "NULL");
+            var logData = new { runId = "run1", hypothesisId = "SEASON-ITEM-UPDATED", location = "RenameCoordinator.cs:457", message = "Season ItemUpdated event received", data = new { seasonId = season.Id.ToString(), seasonName = season.Name ?? "NULL", seasonPath = season.Path ?? "NULL", seasonNumber = season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", seriesId = season.Series?.Id.ToString() ?? "NULL", seriesName = season.Series?.Name ?? "NULL", seriesPath = season.Series?.Path ?? "NULL" }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
+            DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(logData) + "\n");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[MR] [DEBUG] [SEASON-ITEM-UPDATED] ERROR logging season event: {Error}", ex.Message);
+        }
+        var timeSinceLastAction = now - _lastGlobalActionUtc;
+        if (timeSinceLastAction < _globalMinInterval)
+        {
+            _logger.LogInformation("[MR] [DEBUG] [SEASON-SKIP-GLOBAL-DEBOUNCE] SKIP: Global debounce active. Time since last action: {Seconds} seconds (min: {MinSeconds})", timeSinceLastAction.TotalSeconds, _globalMinInterval.TotalSeconds);
+            return;
+        }
+        _lastGlobalActionUtc = now;
+        if (!cfg.RenameSeasonFolders)
+        {
+            _logger.LogInformation("[MR] [DEBUG] [SEASON-SKIP-CONFIG-DISABLED] SKIP: RenameSeasonFolders is disabled in configuration");
+            return;
+        }
+        try
+        {
+            _logger.LogInformation("[MR] [DEBUG] [SEASON-PROCESSING-START] Starting HandleSeasonUpdate for Season: {Name}, ID: {Id}, SeasonNumber: {SeasonNumber}", season.Name ?? "NULL", season.Id, season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[MR] [DEBUG] [SEASON-PROCESSING-START] ERROR logging season processing start: {Error}", ex.Message);
+        }
+        HandleSeasonUpdate(season, cfg, now);
+        try
+        {
+            _logger.LogInformation("[MR] [DEBUG] [SEASON-PROCESSING-COMPLETE] HandleSeasonUpdate completed for Season: {Name}, ID: {Id}", season.Name ?? "NULL", season.Id);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[MR] [DEBUG] [SEASON-PROCESSING-COMPLETE] ERROR logging season processing complete: {Error}", ex.Message);
+        }
+    }
+
+    private void HandleItemUpdatedEpisode(Episode episode, PluginConfiguration cfg, DateTime now)
+    {
+        try
+        {
+            var currentFileName = !string.IsNullOrWhiteSpace(episode.Path) ? Path.GetFileNameWithoutExtension(episode.Path) : "NULL";
+            var isFilenamePattern = !string.IsNullOrWhiteSpace(episode.Name) && System.Text.RegularExpressions.Regex.IsMatch(episode.Name, @"[Ss]\d+[Ee]\d+", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            var logData = new { runId = "run1", hypothesisId = "EPISODE-METADATA", location = "RenameCoordinator.cs:405", message = "Episode ItemUpdated event - full metadata state", data = new { episodeId = episode.Id.ToString(), episodeName = episode.Name ?? "NULL", episodeNameIsFilenamePattern = isFilenamePattern, episodePath = episode.Path ?? "NULL", currentFileName = currentFileName, episodeIndexNumber = episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", parentIndexNumber = episode.ParentIndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", seriesName = episode.Series?.Name ?? "NULL", seriesId = episode.Series?.Id.ToString() ?? "NULL", seriesPath = episode.Series?.Path ?? "NULL", seriesHasProviderIds = episode.Series?.ProviderIds != null && episode.Series.ProviderIds.Count > 0 }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
+            DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(logData) + "\n");
+            _logger.LogInformation("[MR] [EPISODE-METADATA] Episode ItemUpdated: Id={Id}, Name='{Name}' (isPattern={IsPattern}), Path={Path}, S{Season}E{Episode}", episode.Id, episode.Name ?? "NULL", isFilenamePattern, episode.Path ?? "NULL", episode.ParentIndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "??", episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "??");
+        }
+        catch (Exception ex)
+        {
+            DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(new { runId = "run1", hypothesisId = "EPISODE-METADATA", location = "RenameCoordinator.cs:405", message = "ERROR logging episode metadata", data = new { error = ex.Message }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
+        }
+        try
+        {
+            var logData = new { sessionId = "debug-session", runId = "run1", hypothesisId = "MULTI-EP-A", location = "RenameCoordinator.cs:124", message = "Episode ItemUpdated event received", data = new { episodeId = episode.Id.ToString(), episodeName = episode.Name ?? "NULL", episodePath = episode.Path ?? "NULL", episodeIndexNumber = episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", parentIndexNumber = episode.ParentIndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", seriesName = episode.Series?.Name ?? "NULL", seriesPath = episode.Series?.Path ?? "NULL" }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
+            DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(logData) + "\n");
+            _logger.LogInformation("[MR] [MULTI-EP-A] Episode ItemUpdated event: EpisodeId={Id}, Name={Name}, Path={Path}, IndexNumber={IndexNumber}", episode.Id, episode.Name ?? "NULL", episode.Path ?? "NULL", episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+        }
+        catch (Exception ex)
+        {
+            DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "MULTI-EP-A", location = "RenameCoordinator.cs:124", message = "ERROR logging episode event", data = new { error = ex.Message }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
+        }
+        try
+        {
+            var indexNumberImmediate = episode.IndexNumber;
+            var parentIndexNumberImmediate = episode.ParentIndexNumber;
+            var episodeTypeImmediate = episode.GetType().FullName;
+            var logData = new { sessionId = "debug-session", runId = "run1", hypothesisId = "A", location = "RenameCoordinator.cs:124", message = "Episode cast successful - immediate IndexNumber check", data = new { episodeType = episodeTypeImmediate, indexNumber = indexNumberImmediate?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", parentIndexNumber = parentIndexNumberImmediate?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", episodeId = episode.Id.ToString(), episodeName = episode.Name ?? "NULL" }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
+            DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(logData) + "\n");
+            _logger.LogInformation("[MR] [DEBUG-HYP-A] Episode cast: Type={Type}, IndexNumber={IndexNumber}, ParentIndexNumber={ParentIndexNumber}, Id={Id}, Name={Name}", episodeTypeImmediate, indexNumberImmediate?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", parentIndexNumberImmediate?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", episode.Id, episode.Name ?? "NULL");
+        }
+        catch (Exception ex)
+        {
+            var logData = new { sessionId = "debug-session", runId = "run1", hypothesisId = "A", location = "RenameCoordinator.cs:124", message = "ERROR checking IndexNumber immediately after cast", data = new { error = ex.Message, episodeId = episode?.Id.ToString() ?? "NULL" }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
+            DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(logData) + "\n");
+            _logger.LogError(ex, "[MR] [DEBUG-HYP-A] ERROR checking IndexNumber immediately after cast: {Error}", ex.Message);
+        }
+        var seasonNumForLogging = episode.ParentIndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL";
+        var episodeNumForLogging = episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL";
+        if (!cfg.RenameEpisodeFiles)
+        {
+            DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "MULTI-EP-B", location = "RenameCoordinator.cs:148", message = "Episode skipped - RenameEpisodeFiles disabled", data = new { episodeId = episode.Id.ToString(), episodeName = episode.Name ?? "NULL", seasonNumber = seasonNumForLogging, episodeNumber = episodeNumForLogging }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
+            _logger.LogInformation("[MR] [DEBUG] [EPISODE-SKIP-CONFIG-DISABLED] SKIP: RenameEpisodeFiles is disabled in configuration. Season={Season}, Episode={Episode}", seasonNumForLogging, episodeNumForLogging);
+            _logger.LogInformation("[MR] ===== Episode Processing Complete (Skipped - Config Disabled) =====");
+            return;
+        }
+        HandleEpisodeUpdate(episode, cfg, now);
+    }
+
+    private void HandleItemUpdatedMovie(Movie movie, PluginConfiguration cfg, DateTime now)
+    {
+        var timeSinceLastAction = now - _lastGlobalActionUtc;
+        if (timeSinceLastAction < _globalMinInterval)
+        {
+            _logger.LogInformation("[MR] SKIP: Global debounce active. Time since last action: {Seconds} seconds (min: {MinSeconds})", timeSinceLastAction.TotalSeconds, _globalMinInterval.TotalSeconds);
+            return;
+        }
+        _lastGlobalActionUtc = now;
+        if (!cfg.RenameMovieFolders)
+        {
+            _logger.LogInformation("[MR] SKIP: RenameMovieFolders is disabled in configuration");
+            return;
+        }
+        HandleMovieUpdate(movie, cfg, now);
+    }
+
+    private static (bool shouldProceed, string proceedReason) ComputeShouldProceedForSeries(PluginConfiguration cfg, bool forceProcessing, bool providerIdsChanged, bool isFirstTime)
+    {
+        if (!cfg.OnlyRenameWhenProviderIdsChange)
+            return (true, "OnlyRenameWhenProviderIdsChange disabled");
+        if (forceProcessing)
+            return (true, "Bulk refresh - processing all series regardless of provider ID changes");
+        if (providerIdsChanged || isFirstTime)
+            return (true, providerIdsChanged ? "Provider IDs changed (Identify flow)" : "First time processing");
+        return (false, "Provider IDs unchanged - normal scans only process identified shows. Use 'Replace all metadata' for bulk processing.");
+    }
+
+    private void LogSeriesShouldProceedDecision(Series series, string name, bool shouldProceed, string proceedReason, PluginConfiguration cfg, bool forceProcessing, bool providerIdsChanged, bool isFirstTime)
+    {
+        try
+        {
+            var logData = new { runId = "run1", hypothesisId = "SHOULD-PROCEED-DECISION", location = "RenameCoordinator.cs", message = "shouldProceed decision made", data = new { seriesId = series.Id.ToString(), seriesName = name ?? "NULL", shouldProceed = shouldProceed, proceedReason = proceedReason, onlyRenameWhenProviderIdsChange = cfg.OnlyRenameWhenProviderIdsChange, forceProcessing = forceProcessing, providerIdsChanged = providerIdsChanged, isFirstTime = isFirstTime }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
+            DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(logData) + "\n");
+            _logger.LogInformation("[MR] [DEBUG] [SHOULD-PROCEED-DECISION] shouldProceed={ShouldProceed}, Reason='{Reason}'", shouldProceed, proceedReason);
+        }
+        catch (Exception ex)
+        {
+            DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(new { runId = "run1", hypothesisId = "SHOULD-PROCEED-DECISION", location = "RenameCoordinator.cs", message = "ERROR logging shouldProceed", data = new { error = ex.Message }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
+        }
+    }
+
+    private void LogSeriesSkipAndReturn(Series series, string name, string newHash, string proceedReason, PluginConfiguration cfg, bool providerIdsChanged, bool isFirstTime, bool forceProcessing)
+    {
+        try
+        {
+            var logData = new { runId = "run1", hypothesisId = "SKIP-SERIES-PROCESSING", location = "RenameCoordinator.cs", message = "Series processing skipped - shouldProceed=false", data = new { seriesId = series.Id.ToString(), seriesName = name ?? "NULL", hash = newHash, reason = proceedReason, onlyRenameWhenProviderIdsChange = cfg.OnlyRenameWhenProviderIdsChange, providerIdsChanged = providerIdsChanged, isFirstTime = isFirstTime, forceProcessing = forceProcessing }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
+            DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(logData) + "\n");
+            _logger.LogWarning("[MR] [DEBUG] [SKIP-SERIES-PROCESSING] SKIP: {Reason}. Name={Name}, Hash={Hash}", proceedReason, name, newHash);
+        }
+        catch (Exception ex)
+        {
+            DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(new { runId = "run1", hypothesisId = "SKIP-SERIES-PROCESSING", location = "RenameCoordinator.cs", message = "ERROR logging skip", data = new { error = ex.Message }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
+        }
+        _logger.LogWarning("[MR] SKIP: {Reason}. Name={Name}, Hash={Hash}", proceedReason, name, newHash);
+        _logger.LogInformation("[MR] ===== Processing Complete (Skipped) =====");
     }
 
     /// <summary>
@@ -1101,105 +1052,11 @@ public class RenameCoordinator
                 _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] Skipping bulk processing - Provider IDs changed (Identify flow detected)");
             }
 
-            // Determine if we should proceed with rename
-            bool shouldProceed = false;
-            string proceedReason = string.Empty;
-
-            if (cfg.OnlyRenameWhenProviderIdsChange)
-            {
-                // OnlyRenameWhenProviderIdsChange is enabled
-                // NEW BEHAVIOR: Normal scans only process when provider IDs change (Identify flow)
-                // "Replace all metadata" is handled via bulk processing (triggered above)
-                if (forceProcessing)
-                {
-                    // Force processing for bulk refresh (Replace all metadata)
-                    shouldProceed = true;
-                    proceedReason = "Bulk refresh - processing all series regardless of provider ID changes";
-                }
-                else if (providerIdsChanged || isFirstTime)
-                {
-                    // Provider IDs changed or first time - always proceed (Identify flow)
-                    shouldProceed = true;
-                    proceedReason = providerIdsChanged ? "Provider IDs changed (Identify flow)" : "First time processing";
-                }
-                else
-                {
-                    // Provider IDs unchanged - skip (normal scans only process identified shows)
-                    // Bulk refresh is handled separately via ProcessAllSeriesInLibrary
-                    shouldProceed = false;
-                    proceedReason = "Provider IDs unchanged - normal scans only process identified shows. Use 'Replace all metadata' for bulk processing.";
-                }
-            }
-            else
-            {
-                // OnlyRenameWhenProviderIdsChange is disabled - always proceed
-                shouldProceed = true;
-                proceedReason = "OnlyRenameWhenProviderIdsChange disabled";
-            }
-            
-            // #region agent log - SHOULD-PROCEED-DECISION: Track shouldProceed decision
-            try
-            {
-                var logData = new { 
-                    runId = "run1", 
-                    hypothesisId = "SHOULD-PROCEED-DECISION", 
-                    location = "RenameCoordinator.cs:749", 
-                    message = "shouldProceed decision made", 
-                    data = new { 
-                        seriesId = series.Id.ToString(),
-                        seriesName = name ?? "NULL",
-                        shouldProceed = shouldProceed,
-                        proceedReason = proceedReason,
-                        onlyRenameWhenProviderIdsChange = cfg.OnlyRenameWhenProviderIdsChange,
-                        forceProcessing = forceProcessing,
-                        providerIdsChanged = providerIdsChanged,
-                        isFirstTime = isFirstTime
-                    }, 
-                    timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() 
-                };
-                var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                DebugLogHelper.SafeAppend( logJson);
-                _logger.LogInformation("[MR] [DEBUG] [SHOULD-PROCEED-DECISION] shouldProceed={ShouldProceed}, Reason='{Reason}'", shouldProceed, proceedReason);
-            }
-            catch (Exception ex)
-            {
-                DebugLogHelper.SafeAppend( System.Text.Json.JsonSerializer.Serialize(new { runId = "run1", hypothesisId = "SHOULD-PROCEED-DECISION", location = "RenameCoordinator.cs:749", message = "ERROR logging shouldProceed", data = new { error = ex.Message }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
-            }
-            // #endregion
-
+            var (shouldProceed, proceedReason) = ComputeShouldProceedForSeries(cfg, forceProcessing, providerIdsChanged, isFirstTime);
+            LogSeriesShouldProceedDecision(series, name, shouldProceed, proceedReason, cfg, forceProcessing, providerIdsChanged, isFirstTime);
             if (!shouldProceed)
             {
-                // #region agent log - SKIP-SERIES-PROCESSING: Track when series processing is skipped
-                try
-                {
-                    var logData = new { 
-                        runId = "run1", 
-                        hypothesisId = "SKIP-SERIES-PROCESSING", 
-                        location = "RenameCoordinator.cs:784", 
-                        message = "Series processing skipped - shouldProceed=false", 
-                        data = new { 
-                            seriesId = series.Id.ToString(),
-                            seriesName = name ?? "NULL",
-                            hash = newHash,
-                            reason = proceedReason,
-                            onlyRenameWhenProviderIdsChange = cfg.OnlyRenameWhenProviderIdsChange,
-                            providerIdsChanged = providerIdsChanged,
-                            isFirstTime = isFirstTime,
-                            forceProcessing = forceProcessing
-                        }, 
-                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() 
-                    };
-                    var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                    DebugLogHelper.SafeAppend( logJson);
-                    _logger.LogWarning("[MR] [DEBUG] [SKIP-SERIES-PROCESSING] SKIP: {Reason}. Name={Name}, Hash={Hash}", proceedReason, name, newHash);
-                }
-                catch (Exception ex)
-                {
-                    DebugLogHelper.SafeAppend( System.Text.Json.JsonSerializer.Serialize(new { runId = "run1", hypothesisId = "SKIP-SERIES-PROCESSING", location = "RenameCoordinator.cs:784", message = "ERROR logging skip", data = new { error = ex.Message }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
-                }
-                // #endregion
-                _logger.LogWarning("[MR] SKIP: {Reason}. Name={Name}, Hash={Hash}", proceedReason, name, newHash);
-                _logger.LogInformation("[MR] ===== Processing Complete (Skipped) =====");
+                LogSeriesSkipAndReturn(series, name, newHash, proceedReason, cfg, providerIdsChanged, isFirstTime, forceProcessing);
                 return;
             }
 

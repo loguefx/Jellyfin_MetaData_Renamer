@@ -345,29 +345,38 @@ public class PathRenameService
                 throw; // Re-throw to be caught by outer catch blocks
             }
         }
-        catch (UnauthorizedAccessException ex)
-        {
-            _logger.LogError(ex, "[MR] [DEBUG] [SEASON-RENAME-ERROR-UNAUTHORIZED] ERROR: UnauthorizedAccessException - Permission denied. From: {From}, To: {To}, SeasonId={Id}, SeasonNumber={SeasonNumber}", 
-                currentPath, newFullPath, season?.Id, season?.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
-            _logger.LogError("[MR] [DEBUG] [SEASON-RENAME-ERROR-UNAUTHORIZED] Stack Trace: {StackTrace}", ex.StackTrace ?? "N/A");
-        }
-        catch (DirectoryNotFoundException ex)
-        {
-            _logger.LogError(ex, "[MR] [DEBUG] [SEASON-RENAME-ERROR-DIRECTORY-NOT-FOUND] ERROR: DirectoryNotFoundException - Source directory not found. Path: {Path}, SeasonId={Id}, SeasonNumber={SeasonNumber}", 
-                currentPath, season?.Id, season?.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
-            _logger.LogError("[MR] [DEBUG] [SEASON-RENAME-ERROR-DIRECTORY-NOT-FOUND] Stack Trace: {StackTrace}", ex.StackTrace ?? "N/A");
-        }
-        catch (IOException ex)
-        {
-            _logger.LogError(ex, "[MR] [DEBUG] [SEASON-RENAME-ERROR-IO] ERROR: IOException - File system error. From: {From}, To: {To}, Message: {Message}, SeasonId={Id}, SeasonNumber={SeasonNumber}", 
-                currentPath, newFullPath, ex.Message, season?.Id, season?.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
-            _logger.LogError("[MR] [DEBUG] [SEASON-RENAME-ERROR-IO] Stack Trace: {StackTrace}", ex.StackTrace ?? "N/A");
-            _logger.LogError("[MR] [DEBUG] [SEASON-RENAME-ERROR-IO] Inner Exception: {InnerException}", ex.InnerException?.Message ?? "N/A");
-        }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "[MR] [DEBUG] [SEASON-RENAME-ERROR-UNEXPECTED] ERROR: Unexpected exception during rename. Type: {Type}, Message: {Message}, SeasonId={Id}, SeasonNumber={SeasonNumber}", 
-                ex.GetType().FullName, ex.Message, season?.Id, season?.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+            LogSeasonRenameException(ex, currentPath, newFullPath, season);
+        }
+    }
+
+    private void LogSeasonRenameException(Exception ex, string currentPath, string newFullPath, MediaBrowser.Controller.Entities.TV.Season season)
+    {
+        var seasonNum = season?.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL";
+        if (ex is UnauthorizedAccessException)
+        {
+            _logger.LogError(ex, "[MR] [DEBUG] [SEASON-RENAME-ERROR-UNAUTHORIZED] ERROR: UnauthorizedAccessException - Permission denied. From: {From}, To: {To}, SeasonId={Id}, SeasonNumber={SeasonNumber}",
+                currentPath, newFullPath, season?.Id, seasonNum);
+            _logger.LogError("[MR] [DEBUG] [SEASON-RENAME-ERROR-UNAUTHORIZED] Stack Trace: {StackTrace}", ex.StackTrace ?? "N/A");
+        }
+        else if (ex is DirectoryNotFoundException)
+        {
+            _logger.LogError(ex, "[MR] [DEBUG] [SEASON-RENAME-ERROR-DIRECTORY-NOT-FOUND] ERROR: DirectoryNotFoundException - Source directory not found. Path: {Path}, SeasonId={Id}, SeasonNumber={SeasonNumber}",
+                currentPath, season?.Id, seasonNum);
+            _logger.LogError("[MR] [DEBUG] [SEASON-RENAME-ERROR-DIRECTORY-NOT-FOUND] Stack Trace: {StackTrace}", ex.StackTrace ?? "N/A");
+        }
+        else if (ex is IOException ioEx)
+        {
+            _logger.LogError(ioEx, "[MR] [DEBUG] [SEASON-RENAME-ERROR-IO] ERROR: IOException - File system error. From: {From}, To: {To}, Message: {Message}, SeasonId={Id}, SeasonNumber={SeasonNumber}",
+                currentPath, newFullPath, ioEx.Message, season?.Id, seasonNum);
+            _logger.LogError("[MR] [DEBUG] [SEASON-RENAME-ERROR-IO] Stack Trace: {StackTrace}", ioEx.StackTrace ?? "N/A");
+            _logger.LogError("[MR] [DEBUG] [SEASON-RENAME-ERROR-IO] Inner Exception: {InnerException}", ioEx.InnerException?.Message ?? "N/A");
+        }
+        else
+        {
+            _logger.LogError(ex, "[MR] [DEBUG] [SEASON-RENAME-ERROR-UNEXPECTED] ERROR: Unexpected exception during rename. Type: {Type}, Message: {Message}, SeasonId={Id}, SeasonNumber={SeasonNumber}",
+                ex.GetType().FullName, ex.Message, season?.Id, seasonNum);
             _logger.LogError("[MR] [DEBUG] [SEASON-RENAME-ERROR-UNEXPECTED] Stack Trace: {StackTrace}", ex.StackTrace ?? "N/A");
             _logger.LogError("[MR] [DEBUG] [SEASON-RENAME-ERROR-UNEXPECTED] Inner Exception: {InnerException}", ex.InnerException?.Message ?? "N/A");
         }
@@ -592,241 +601,87 @@ public class PathRenameService
                 return;
             }
 
-            if (isSeason2Plus)
-            {
-                _logger.LogWarning("[MR] === Attempting Actual Rename (Season 2+) ===");
-                _logger.LogWarning("[MR] From: {From}", currentPath);
-                _logger.LogWarning("[MR] To: {To}", newFullPath);
-            }
-            else
-            {
-                _logger.LogInformation("[MR] === Attempting Actual Rename ===");
-                _logger.LogInformation("[MR] From: {From}", currentPath);
-                _logger.LogInformation("[MR] To: {To}", newFullPath);
-            }
-            
-            // #region agent log - MULTI-SEASON-RENAME-ATTEMPT: Track Season 2+ rename attempt
-            if (isSeason2Plus)
-            {
-                try
-                {
-                    var logData = new {
-                        runId = "run1",
-                        hypothesisId = "MULTI-SEASON-RENAME-ATTEMPT",
-                        location = "PathRenameService.cs:438",
-                        message = "About to rename Season 2+ episode file",
-                        data = new {
-                            episodeId = episode.Id.ToString(),
-                            episodeName = episode.Name ?? "NULL",
-                            seasonNumber = seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
-                            episodeNumber = episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
-                            fromPath = currentPath,
-                            toPath = newFullPath,
-                            dryRun = dryRun
-                        },
-                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-                    };
-                    var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                    DebugLogHelper.SafeAppend( logJson);
-                }
-                catch (Exception logEx)
-                {
-                    _logger.LogError(logEx, "[MR] [DEBUG] [MULTI-SEASON-RENAME-ATTEMPT] ERROR logging: {Error}", logEx.Message);
-                }
-            }
-            // #endregion
-            
-            File.Move(currentPath, newFullPath);
-            
-            if (isSeason2Plus)
-            {
-                _logger.LogWarning("[MR] ✓✓✓ SUCCESS: Season 2+ episode file renamed successfully!");
-                _logger.LogWarning("[MR] Old: {From}", currentPath);
-                _logger.LogWarning("[MR] New: {To}", newFullPath);
-            }
-            else
-            {
-                _logger.LogInformation("[MR] ✓✓✓ SUCCESS: Episode file renamed successfully!");
-                _logger.LogInformation("[MR] Old: {From}", currentPath);
-                _logger.LogInformation("[MR] New: {To}", newFullPath);
-            }
-            
-            // #region agent log - MULTI-SEASON-RENAME-SUCCESS: Track successful Season 2+ rename
-            if (isSeason2Plus)
-            {
-                try
-                {
-                    var logData = new {
-                        runId = "run1",
-                        hypothesisId = "MULTI-SEASON-RENAME-SUCCESS",
-                        location = "PathRenameService.cs:440",
-                        message = "Season 2+ episode file renamed successfully",
-                        data = new {
-                            episodeId = episode.Id.ToString(),
-                            episodeName = episode.Name ?? "NULL",
-                            seasonNumber = seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
-                            episodeNumber = episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
-                            fromPath = currentPath,
-                            toPath = newFullPath
-                        },
-                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-                    };
-                    var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                    DebugLogHelper.SafeAppend( logJson);
-                }
-                catch (Exception logEx)
-                {
-                    _logger.LogError(logEx, "[MR] [DEBUG] [MULTI-SEASON-RENAME-SUCCESS] ERROR logging: {Error}", logEx.Message);
-                }
-            }
-            // #endregion
-            
-            // Verify the rename
-            if (File.Exists(newFullPath))
-            {
-                _logger.LogInformation("[MR] ✓ Verification: New file exists");
-            }
-            else
-            {
-                _logger.LogError("[MR] ✗ Verification FAILED: New file does not exist after rename!");
-            }
-        }
-        catch (UnauthorizedAccessException ex)
-        {
-            var seasonNumber = episode?.ParentIndexNumber;
-            var isSeason2Plus = seasonNumber.HasValue && seasonNumber.Value >= 2;
-            _logger.LogError(ex, "[MR] ERROR: UnauthorizedAccessException - Permission denied. From: {From}, To: {To} (Season2Plus={IsSeason2Plus})", 
-                currentPath, newFullPath, isSeason2Plus);
-            // #region agent log - MULTI-SEASON-RENAME-ERROR: Track Season 2+ rename errors
-            if (isSeason2Plus)
-            {
-                try
-                {
-                    var logData = new {
-                        runId = "run1",
-                        hypothesisId = "MULTI-SEASON-RENAME-ERROR",
-                        location = "PathRenameService.cs:454",
-                        message = "UnauthorizedAccessException during Season 2+ episode rename",
-                        data = new {
-                            episodeId = episode?.Id.ToString() ?? "NULL",
-                            episodeName = episode?.Name ?? "NULL",
-                            seasonNumber = seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
-                            exceptionType = ex.GetType().FullName,
-                            exceptionMessage = ex.Message,
-                            fromPath = currentPath,
-                            toPath = newFullPath
-                        },
-                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-                    };
-                    var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                    DebugLogHelper.SafeAppend( logJson);
-                }
-                catch { }
-            }
-            // #endregion
-        }
-        catch (FileNotFoundException ex)
-        {
-            var seasonNumber = episode?.ParentIndexNumber;
-            var isSeason2Plus = seasonNumber.HasValue && seasonNumber.Value >= 2;
-            _logger.LogError(ex, "[MR] ERROR: FileNotFoundException - Source file not found. Path: {Path} (Season2Plus={IsSeason2Plus})", 
-                currentPath, isSeason2Plus);
-            // #region agent log - MULTI-SEASON-RENAME-ERROR: Track Season 2+ rename errors
-            if (isSeason2Plus)
-            {
-                try
-                {
-                    var logData = new {
-                        runId = "run1",
-                        hypothesisId = "MULTI-SEASON-RENAME-ERROR",
-                        location = "PathRenameService.cs:459",
-                        message = "FileNotFoundException during Season 2+ episode rename",
-                        data = new {
-                            episodeId = episode?.Id.ToString() ?? "NULL",
-                            episodeName = episode?.Name ?? "NULL",
-                            seasonNumber = seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
-                            exceptionType = ex.GetType().FullName,
-                            exceptionMessage = ex.Message,
-                            path = currentPath
-                        },
-                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-                    };
-                    var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                    DebugLogHelper.SafeAppend( logJson);
-                }
-                catch { }
-            }
-            // #endregion
-        }
-        catch (IOException ex)
-        {
-            var seasonNumber = episode?.ParentIndexNumber;
-            var isSeason2Plus = seasonNumber.HasValue && seasonNumber.Value >= 2;
-            _logger.LogError(ex, "[MR] ERROR: IOException - File system error. From: {From}, To: {To}, Message: {Message} (Season2Plus={IsSeason2Plus})", 
-                currentPath, newFullPath, ex.Message, isSeason2Plus);
-            // #region agent log - MULTI-SEASON-RENAME-ERROR: Track Season 2+ rename errors
-            if (isSeason2Plus)
-            {
-                try
-                {
-                    var logData = new {
-                        runId = "run1",
-                        hypothesisId = "MULTI-SEASON-RENAME-ERROR",
-                        location = "PathRenameService.cs:464",
-                        message = "IOException during Season 2+ episode rename",
-                        data = new {
-                            episodeId = episode?.Id.ToString() ?? "NULL",
-                            episodeName = episode?.Name ?? "NULL",
-                            seasonNumber = seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
-                            exceptionType = ex.GetType().FullName,
-                            exceptionMessage = ex.Message,
-                            fromPath = currentPath,
-                            toPath = newFullPath
-                        },
-                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-                    };
-                    var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                    DebugLogHelper.SafeAppend( logJson);
-                }
-                catch { }
-            }
-            // #endregion
+            ExecuteEpisodeFileMove(episode, currentPath, newFullPath, isSeason2Plus, seasonNumber);
+            LogEpisodeRenameVerification(newFullPath);
         }
         catch (Exception ex)
         {
-            var seasonNumber = episode?.ParentIndexNumber;
-            var isSeason2Plus = seasonNumber.HasValue && seasonNumber.Value >= 2;
-            _logger.LogError(ex, "[MR] ERROR: Unexpected exception during rename. Type: {Type}, Message: {Message} (Season2Plus={IsSeason2Plus})", 
-                ex.GetType().Name, ex.Message, isSeason2Plus);
-            _logger.LogError("[MR] Stack Trace: {StackTrace}", ex.StackTrace ?? "N/A");
-            // #region agent log - MULTI-SEASON-RENAME-ERROR: Track Season 2+ rename errors
-            if (isSeason2Plus)
+            LogEpisodeRenameException(ex, currentPath, newFullPath, episode);
+        }
+    }
+
+    private void ExecuteEpisodeFileMove(Episode episode, string currentPath, string newFullPath, bool isSeason2Plus, int? seasonNumber)
+    {
+        if (isSeason2Plus)
+        {
+            _logger.LogWarning("[MR] === Attempting Actual Rename (Season 2+) ===");
+            _logger.LogWarning("[MR] From: {From}", currentPath);
+            _logger.LogWarning("[MR] To: {To}", newFullPath);
+            try
             {
-                try
-                {
-                    var logData = new {
-                        runId = "run1",
-                        hypothesisId = "MULTI-SEASON-RENAME-ERROR",
-                        location = "PathRenameService.cs:466",
-                        message = "Unexpected exception during Season 2+ episode rename",
-                        data = new {
-                            episodeId = episode?.Id.ToString() ?? "NULL",
-                            episodeName = episode?.Name ?? "NULL",
-                            seasonNumber = seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
-                            exceptionType = ex.GetType().FullName,
-                            exceptionMessage = ex.Message,
-                            stackTrace = ex.StackTrace ?? "N/A",
-                            fromPath = currentPath,
-                            toPath = newFullPath
-                        },
-                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-                    };
-                    var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                    DebugLogHelper.SafeAppend( logJson);
-                }
-                catch { }
+                var logData = new { runId = "run1", hypothesisId = "MULTI-SEASON-RENAME-ATTEMPT", location = "PathRenameService.cs", message = "About to rename Season 2+ episode file", data = new { episodeId = episode.Id.ToString(), episodeName = episode.Name ?? "NULL", seasonNumber = seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", episodeNumber = episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", fromPath = currentPath, toPath = newFullPath }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
+                DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(logData) + "\n");
             }
-            // #endregion
+            catch (Exception logEx) { _logger.LogError(logEx, "[MR] [DEBUG] [MULTI-SEASON-RENAME-ATTEMPT] ERROR logging: {Error}", logEx.Message); }
+        }
+        else
+        {
+            _logger.LogInformation("[MR] === Attempting Actual Rename ===");
+            _logger.LogInformation("[MR] From: {From}", currentPath);
+            _logger.LogInformation("[MR] To: {To}", newFullPath);
+        }
+        File.Move(currentPath, newFullPath);
+        if (isSeason2Plus)
+        {
+            _logger.LogWarning("[MR] ✓✓✓ SUCCESS: Season 2+ episode file renamed successfully!");
+            _logger.LogWarning("[MR] Old: {From}", currentPath);
+            _logger.LogWarning("[MR] New: {To}", newFullPath);
+            try
+            {
+                var logData = new { runId = "run1", hypothesisId = "MULTI-SEASON-RENAME-SUCCESS", location = "PathRenameService.cs", message = "Season 2+ episode file renamed successfully", data = new { episodeId = episode.Id.ToString(), episodeName = episode.Name ?? "NULL", seasonNumber = seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", episodeNumber = episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", fromPath = currentPath, toPath = newFullPath }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
+                DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(logData) + "\n");
+            }
+            catch (Exception logEx) { _logger.LogError(logEx, "[MR] [DEBUG] [MULTI-SEASON-RENAME-SUCCESS] ERROR logging: {Error}", logEx.Message); }
+        }
+        else
+        {
+            _logger.LogInformation("[MR] ✓✓✓ SUCCESS: Episode file renamed successfully!");
+            _logger.LogInformation("[MR] Old: {From}", currentPath);
+            _logger.LogInformation("[MR] New: {To}", newFullPath);
+        }
+    }
+
+    private void LogEpisodeRenameVerification(string newFullPath)
+    {
+        if (File.Exists(newFullPath))
+            _logger.LogInformation("[MR] ✓ Verification: New file exists");
+        else
+            _logger.LogError("[MR] ✗ Verification FAILED: New file does not exist after rename!");
+    }
+
+    private void LogEpisodeRenameException(Exception ex, string currentPath, string newFullPath, Episode episode)
+    {
+        var seasonNumber = episode?.ParentIndexNumber;
+        var isSeason2Plus = seasonNumber.HasValue && seasonNumber.Value >= 2;
+        if (ex is UnauthorizedAccessException)
+            _logger.LogError(ex, "[MR] ERROR: UnauthorizedAccessException - Permission denied. From: {From}, To: {To} (Season2Plus={IsSeason2Plus})", currentPath, newFullPath, isSeason2Plus);
+        else if (ex is FileNotFoundException)
+            _logger.LogError(ex, "[MR] ERROR: FileNotFoundException - Source file not found. Path: {Path} (Season2Plus={IsSeason2Plus})", currentPath, isSeason2Plus);
+        else if (ex is IOException ioEx)
+            _logger.LogError(ioEx, "[MR] ERROR: IOException - File system error. From: {From}, To: {To}, Message: {Message} (Season2Plus={IsSeason2Plus})", currentPath, newFullPath, ioEx.Message, isSeason2Plus);
+        else
+        {
+            _logger.LogError(ex, "[MR] ERROR: Unexpected exception during rename. Type: {Type}, Message: {Message} (Season2Plus={IsSeason2Plus})", ex.GetType().Name, ex.Message, isSeason2Plus);
+            _logger.LogError("[MR] Stack Trace: {StackTrace}", ex.StackTrace ?? "N/A");
+        }
+        if (isSeason2Plus)
+        {
+            try
+            {
+                var logData = new { runId = "run1", hypothesisId = "MULTI-SEASON-RENAME-ERROR", location = "PathRenameService.cs", message = "Exception during Season 2+ episode rename", data = new { episodeId = episode?.Id.ToString() ?? "NULL", episodeName = episode?.Name ?? "NULL", seasonNumber = seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", exceptionType = ex.GetType().FullName, exceptionMessage = ex.Message, fromPath = currentPath, toPath = newFullPath }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
+                DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(logData) + "\n");
+            }
+            catch { }
         }
     }
 
