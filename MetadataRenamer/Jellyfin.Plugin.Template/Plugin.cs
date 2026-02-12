@@ -55,193 +55,18 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
             DebugLogHelper.SafeAppend( System.Text.Json.JsonSerializer.Serialize(new { sessionId = DebugSessionId, runId = "run1", hypothesisId = "A", location = "Plugin.cs:33", message = "Plugin constructor", data = new { pluginName = Name, pluginId = Id.ToString(), dataPath = applicationPaths?.DataPath ?? "null" }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
             // #endregion
             
-            // CRITICAL: Check for deleteOnStartup marker BEFORE any initialization
-            // This prevents the plugin from loading if it's marked for deletion,
-            // allowing Jellyfin to delete the folder
             var pluginsPath = applicationPaths?.PluginsPath ?? UnknownPathPlaceholder;
             var pluginVersion = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? DefaultVersionFallback;
             var versionedPluginPath = System.IO.Path.Combine(pluginsPath, $"{Name}_{pluginVersion}");
             var nonVersionedPluginPath = System.IO.Path.Combine(pluginsPath, Name);
-            
-            // Get the actual DLL location (most reliable path)
             var assemblyLocation = System.Reflection.Assembly.GetExecutingAssembly().Location;
-            var dllDirectory = !string.IsNullOrWhiteSpace(assemblyLocation) 
-                ? System.IO.Path.GetDirectoryName(assemblyLocation) 
-                : null;
-            
-            // Check for delete marker in multiple locations (Jellyfin may place it in different places)
-            var deleteMarkerPaths = new List<string>();
-            
-            // Most important: Check in the DLL's actual directory (where Jellyfin likely places it)
-            if (!string.IsNullOrWhiteSpace(dllDirectory))
-            {
-                deleteMarkerPaths.Add(System.IO.Path.Combine(dllDirectory, DeleteOnStartupMarkerFileName));
-            }
-            
-            // Also check standard locations
-            deleteMarkerPaths.Add(System.IO.Path.Combine(versionedPluginPath, DeleteOnStartupMarkerFileName));           // Versioned folder
-            deleteMarkerPaths.Add(System.IO.Path.Combine(nonVersionedPluginPath, DeleteOnStartupMarkerFileName));       // Non-versioned folder
-            deleteMarkerPaths.Add(System.IO.Path.Combine(pluginsPath, DeleteOnStartupMarkerFileName));                  // Plugins root
-            deleteMarkerPaths.Add(System.IO.Path.Combine(System.IO.Path.GetDirectoryName(versionedPluginPath) ?? pluginsPath, DeleteOnStartupMarkerFileName));  // Parent of versioned folder
-            
-            // Check parent of DLL directory
-            if (!string.IsNullOrWhiteSpace(dllDirectory))
-            {
-                var dllParent = System.IO.Path.GetDirectoryName(dllDirectory);
-                if (!string.IsNullOrWhiteSpace(dllParent))
-                {
-                    deleteMarkerPaths.Add(System.IO.Path.Combine(dllParent, DeleteOnStartupMarkerFileName));
-                }
-            }
-            
-            // Also check for case variations (Windows is case-insensitive, but be thorough)
-            var deleteMarkerVariations = new List<string>();
-            var basePaths = new List<string> { versionedPluginPath, nonVersionedPluginPath, pluginsPath };
-            if (!string.IsNullOrWhiteSpace(dllDirectory))
-            {
-                basePaths.Add(dllDirectory);
-            }
-            
-            foreach (var basePath in basePaths.Where(b => !string.IsNullOrWhiteSpace(b)))
-            {
-                deleteMarkerVariations.Add(System.IO.Path.Combine(basePath, DeleteOnStartupMarkerFileName));
-                deleteMarkerVariations.Add(System.IO.Path.Combine(basePath, ".DELETEONSTARTUP"));
-                deleteMarkerVariations.Add(System.IO.Path.Combine(basePath, ".DeleteOnStartup"));
-            }
-            
-            _logger.LogDebug("[MR] Delete marker check: PluginsPath={Path}, Versioned={Versioned}, NonVersioned={NonVersioned}", pluginsPath, System.IO.Directory.Exists(versionedPluginPath), System.IO.Directory.Exists(nonVersionedPluginPath));
-            
-            // List all files in versioned folder if it exists (to see what's actually there)
-            if (System.IO.Directory.Exists(versionedPluginPath))
-            {
-                try
-                {
-                    var files = System.IO.Directory.GetFiles(versionedPluginPath, "*", System.IO.SearchOption.AllDirectories);
-                    _logger.LogDebug("[MR] Versioned folder: {Count} files", files.Length);
-                    
-                    // Check for any file containing "delete" in the name (case-insensitive)
-                    var deleteRelatedFiles = files.Where(f => 
-                        System.IO.Path.GetFileName(f).Contains("delete", StringComparison.OrdinalIgnoreCase)).ToList();
-                    if (deleteRelatedFiles.Any())
-                    {
-                        _logger.LogWarning("[MR] ⚠️ Found files with 'delete' in name: {Files}", 
-                            string.Join(", ", deleteRelatedFiles.Select(f => System.IO.Path.GetFileName(f))));
-                    }
-                    
-                    // Check for hidden files (including .deleteOnStartup marker)
-                    var hiddenFiles = files.Where(f => 
-                    {
-                        try
-                        {
-                            var fileInfo = new System.IO.FileInfo(f);
-                            return (fileInfo.Attributes & System.IO.FileAttributes.Hidden) != 0;
-                        }
-                        catch
-                        {
-                            // Intentionally ignore: treat as non-hidden if attributes cannot be read.
-                            return false;
-                        }
-                    }).ToList();
-                    if (hiddenFiles.Any())
-                    {
-                        _logger.LogDebug("[MR] Hidden files in versioned folder: {Count}", hiddenFiles.Count);
-                    }
-                }
-                catch (Exception listEx)
-                {
-                    _logger.LogWarning(listEx, "[MR] Could not list files in versioned folder: {Message}", listEx.Message);
-                }
-            }
-            
-            // Also check parent directory for any delete markers
-            try
-            {
-                var parentDir = System.IO.Path.GetDirectoryName(versionedPluginPath);
-                if (!string.IsNullOrWhiteSpace(parentDir) && System.IO.Directory.Exists(parentDir))
-                {
-                    var parentFiles = System.IO.Directory.GetFiles(parentDir, "*", System.IO.SearchOption.TopDirectoryOnly);
-                    var parentDeleteFiles = parentFiles.Where(f => 
-                        System.IO.Path.GetFileName(f).Contains("delete", StringComparison.OrdinalIgnoreCase)).ToList();
-                    if (parentDeleteFiles.Any())
-                    {
-                        _logger.LogWarning("[MR] ⚠️ Found files with 'delete' in name in parent directory: {Files}", 
-                            string.Join(", ", parentDeleteFiles.Select(f => System.IO.Path.GetFileName(f))));
-                    }
-                }
-            }
-            catch (Exception parentEx)
-            {
-                _logger.LogWarning(parentEx, "[MR] Could not check parent directory for delete markers: {Message}", parentEx.Message);
-            }
-            
-            // Check all marker paths (prioritize DLL directory first)
-            string? foundMarkerPath = null;
-            var allMarkerPaths = deleteMarkerPaths.Concat(deleteMarkerVariations).Distinct().ToList();
-            
-            // Sort to check DLL directory first (most likely location)
-            if (!string.IsNullOrWhiteSpace(dllDirectory))
-            {
-                var dllMarkerPath = System.IO.Path.Combine(dllDirectory, DeleteOnStartupMarkerFileName);
-                if (allMarkerPaths.Contains(dllMarkerPath))
-                {
-                    var index = allMarkerPaths.IndexOf(dllMarkerPath);
-                    if (index > 0)
-                    {
-                        allMarkerPaths.RemoveAt(index);
-                        allMarkerPaths.Insert(0, dllMarkerPath);
-                    }
-                }
-            }
-            
-            foreach (var markerPath in allMarkerPaths)
-            {
-                try
-                {
-                    if (System.IO.File.Exists(markerPath))
-                    {
-                        foundMarkerPath = markerPath;
-                        _logger.LogWarning("[MR] ⚠️ DELETE MARKER FOUND at: {Path}", markerPath);
-                        break;
-                    }
-                    else
-                    {
-                        _logger.LogDebug("[MR] Delete marker not at: {Path}", markerPath);
-                    }
-                }
-                catch (Exception checkEx)
-                {
-                    _logger.LogWarning(checkEx, "[MR] Error checking delete marker at {Path}: {Message}", markerPath, checkEx.Message);
-                }
-            }
-            
-            if (foundMarkerPath != null)
-            {
-                _logger.LogWarning("[MR] ⚠️ Delete marker found at {Path} - preventing plugin load", foundMarkerPath);
-                
-                // #region agent log - Uninstall debugging
-                try
-                {
-                    var logData = new { sessionId = DebugSessionId, runId = "run1", hypothesisId = "UNINSTALL-A", location = "Plugin.cs:142", message = "Delete marker found - throwing exception", data = new { markerPath = foundMarkerPath, pluginName = Name, pluginVersion = pluginVersion, pluginsPath = pluginsPath }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
-                    var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                    DebugLogHelper.SafeAppend( logJson);
-                }
-                catch
-                {
-                    // Intentionally ignore: debug log write must not impact plugin load.
-                }
-                // #endregion
-                
-                // Throw exception to prevent plugin from loading
-                // This ensures the DLL isn't loaded, allowing Jellyfin to delete the folder
-                throw new InvalidOperationException(
-                    $"Plugin is marked for deletion (deleteOnStartup marker found). " +
-                    $"This prevents the plugin from loading, allowing Jellyfin to delete the folder. " +
-                    $"Marker path: {foundMarkerPath}");
-            }
-            
+            var dllDirectory = !string.IsNullOrWhiteSpace(assemblyLocation) ? System.IO.Path.GetDirectoryName(assemblyLocation) : null;
+
+            LogVersionedFolderDiagnostics(versionedPluginPath);
+            var allMarkerPaths = BuildDeleteMarkerPathList(pluginsPath, versionedPluginPath, nonVersionedPluginPath, dllDirectory);
+            CheckDeleteMarkerAndThrowIfFound(allMarkerPaths, dllDirectory, pluginVersion, pluginsPath);
+
             _logger.LogInformation("[MR] ✓ No delete marker found - plugin will load normally");
-            
-            // Attempt to unblock any blocked files in the plugin directory
             TryUnblockPluginFiles(dllDirectory ?? versionedPluginPath);
             
             // #region agent log - Uninstall debugging
@@ -289,11 +114,12 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
                         DebugLogHelper.SafeAppend( System.Text.Json.JsonSerializer.Serialize(new { sessionId = DebugSessionId, runId = RunIdStartup, hypothesisId = "H2", location = "Plugin.cs:85", message = "DLL file exists and plugin is being loaded", data = new { dllPath = dllPath, dllSize = dllInfo.Length, lastModified = dllInfo.LastWriteTime.ToString(System.Globalization.CultureInfo.InvariantCulture) }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
                         // #endregion
                         
-                        // Try to check if file is locked
+                        // Try to check if file is locked (open succeeds = not locked by others)
                         try
                         {
                             using (var fs = System.IO.File.Open(dllPath, System.IO.FileMode.Open, System.IO.FileAccess.Read, System.IO.FileShare.ReadWrite))
                             {
+                                _ = fs.Length; // Use stream to satisfy S108; verifies file is readable
                             }
                         }
                         catch (Exception fileEx)
@@ -322,91 +148,132 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
         }
     }
 
+    private void LogVersionedFolderDiagnostics(string versionedPluginPath)
+    {
+        _logger.LogDebug("[MR] Delete marker check: Versioned={Versioned}", System.IO.Directory.Exists(versionedPluginPath));
+        if (!System.IO.Directory.Exists(versionedPluginPath)) return;
+        try
+        {
+            var files = System.IO.Directory.GetFiles(versionedPluginPath, "*", System.IO.SearchOption.AllDirectories);
+            _logger.LogDebug("[MR] Versioned folder: {Count} files", files.Length);
+            var deleteRelated = files.Where(f => System.IO.Path.GetFileName(f).Contains("delete", StringComparison.OrdinalIgnoreCase)).ToList();
+            if (deleteRelated.Any())
+            {
+                _logger.LogWarning("[MR] ⚠️ Found files with 'delete' in name: {Files}", string.Join(", ", deleteRelated.Select(f => System.IO.Path.GetFileName(f))));
+            }
+            var parentDir = System.IO.Path.GetDirectoryName(versionedPluginPath);
+            if (string.IsNullOrWhiteSpace(parentDir) || !System.IO.Directory.Exists(parentDir)) return;
+            var parentFiles = System.IO.Directory.GetFiles(parentDir, "*", System.IO.SearchOption.TopDirectoryOnly);
+            var parentDelete = parentFiles.Where(f => System.IO.Path.GetFileName(f).Contains("delete", StringComparison.OrdinalIgnoreCase)).ToList();
+            if (parentDelete.Any())
+            {
+                _logger.LogWarning("[MR] ⚠️ Found files with 'delete' in name in parent: {Files}", string.Join(", ", parentDelete.Select(f => System.IO.Path.GetFileName(f))));
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[MR] Could not list versioned folder: {Message}", ex.Message);
+        }
+    }
+
+    private static List<string> BuildDeleteMarkerPathList(string pluginsPath, string versionedPluginPath, string nonVersionedPluginPath, string? dllDirectory)
+    {
+        var deleteMarkerPaths = new List<string>();
+        if (!string.IsNullOrWhiteSpace(dllDirectory))
+        {
+            deleteMarkerPaths.Add(System.IO.Path.Combine(dllDirectory, DeleteOnStartupMarkerFileName));
+        }
+        deleteMarkerPaths.Add(System.IO.Path.Combine(versionedPluginPath, DeleteOnStartupMarkerFileName));
+        deleteMarkerPaths.Add(System.IO.Path.Combine(nonVersionedPluginPath, DeleteOnStartupMarkerFileName));
+        deleteMarkerPaths.Add(System.IO.Path.Combine(pluginsPath, DeleteOnStartupMarkerFileName));
+        deleteMarkerPaths.Add(System.IO.Path.Combine(System.IO.Path.GetDirectoryName(versionedPluginPath) ?? pluginsPath, DeleteOnStartupMarkerFileName));
+        if (!string.IsNullOrWhiteSpace(dllDirectory))
+        {
+            var dllParent = System.IO.Path.GetDirectoryName(dllDirectory);
+            if (!string.IsNullOrWhiteSpace(dllParent))
+            {
+                deleteMarkerPaths.Add(System.IO.Path.Combine(dllParent, DeleteOnStartupMarkerFileName));
+            }
+        }
+        var basePaths = new List<string> { versionedPluginPath, nonVersionedPluginPath, pluginsPath };
+        if (!string.IsNullOrWhiteSpace(dllDirectory)) basePaths.Add(dllDirectory);
+        var variations = new List<string>();
+        foreach (var basePath in basePaths.Where(b => !string.IsNullOrWhiteSpace(b)))
+        {
+            variations.Add(System.IO.Path.Combine(basePath, DeleteOnStartupMarkerFileName));
+            variations.Add(System.IO.Path.Combine(basePath, ".DELETEONSTARTUP"));
+            variations.Add(System.IO.Path.Combine(basePath, ".DeleteOnStartup"));
+        }
+        var all = deleteMarkerPaths.Concat(variations).Distinct().ToList();
+        if (!string.IsNullOrWhiteSpace(dllDirectory))
+        {
+            var dllMarker = System.IO.Path.Combine(dllDirectory, DeleteOnStartupMarkerFileName);
+            if (all.Contains(dllMarker))
+            {
+                all.Remove(dllMarker);
+                all.Insert(0, dllMarker);
+            }
+        }
+        return all;
+    }
+
+    private void CheckDeleteMarkerAndThrowIfFound(List<string> allMarkerPaths, string? dllDirectory, string pluginVersion, string pluginsPath)
+    {
+        string? foundMarkerPath = null;
+        foreach (var markerPath in allMarkerPaths)
+        {
+            try
+            {
+                if (!System.IO.File.Exists(markerPath))
+                {
+                    _logger.LogDebug("[MR] Delete marker not at: {Path}", markerPath);
+                    continue;
+                }
+                foundMarkerPath = markerPath;
+                _logger.LogWarning("[MR] ⚠️ Delete marker found at {Path} - preventing plugin load", markerPath);
+                break;
+            }
+            catch (Exception checkEx)
+            {
+                _logger.LogWarning(checkEx, "[MR] Error checking delete marker at {Path}: {Message}", markerPath, checkEx.Message);
+            }
+        }
+        if (foundMarkerPath == null) return;
+        try
+        {
+            var logData = new { sessionId = DebugSessionId, runId = "run1", hypothesisId = "UNINSTALL-A", location = "Plugin.cs:142", message = "Delete marker found - throwing exception", data = new { markerPath = foundMarkerPath, pluginName = Name, pluginVersion = pluginVersion, pluginsPath = pluginsPath }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
+            DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(logData) + "\n");
+        }
+        catch
+        {
+            // Intentionally ignore: debug log must not impact plugin load.
+        }
+        throw new InvalidOperationException(
+            $"Plugin is marked for deletion (deleteOnStartup marker found). Marker path: {foundMarkerPath}");
+    }
+
     /// <summary>
     /// Attempts to unblock files in the plugin directory that may be blocked by Windows Application Control.
     /// </summary>
     /// <param name="pluginDirectory">The plugin directory path.</param>
     private void TryUnblockPluginFiles(string pluginDirectory)
     {
+        if (string.IsNullOrWhiteSpace(pluginDirectory) || !Directory.Exists(pluginDirectory))
+        {
+            _logger.LogWarning("[MR] Cannot unblock files - plugin directory not found: {Path}", pluginDirectory ?? "NULL");
+            return;
+        }
+
         try
         {
-            if (string.IsNullOrWhiteSpace(pluginDirectory) || !Directory.Exists(pluginDirectory))
-            {
-                _logger.LogWarning("[MR] Cannot unblock files - plugin directory not found: {Path}", pluginDirectory ?? "NULL");
-                return;
-            }
-
             var files = Directory.GetFiles(pluginDirectory, "*", SearchOption.AllDirectories);
             var unblockedCount = 0;
             var failedCount = 0;
-
             foreach (var filePath in files)
             {
-                try
-                {
-                    var fileInfo = new FileInfo(filePath);
-                    var fileName = fileInfo.Name;
-
-                    // Method 1: Try using PowerShell Unblock-File via Process.Start
-                    try
-                    {
-                        var processStartInfo = new System.Diagnostics.ProcessStartInfo
-                        {
-                            FileName = "powershell.exe",
-                            Arguments = $"-Command \"Unblock-File -Path '{filePath.Replace("'", "''")}' -ErrorAction SilentlyContinue\"",
-                            UseShellExecute = false,
-                            CreateNoWindow = true,
-                            RedirectStandardOutput = true,
-                            RedirectStandardError = true,
-                            WindowStyle = System.Diagnostics.ProcessWindowStyle.Hidden
-                        };
-
-                        using (var process = System.Diagnostics.Process.Start(processStartInfo))
-                        {
-                            if (process != null)
-                            {
-                                process.WaitForExit(5000); // Wait max 5 seconds
-                                if (process.ExitCode == 0)
-                                {
-                                    unblockedCount++;
-                                    _logger.LogDebug("[MR] Unblocked: {FileName}", fileName);
-                                }
-                                else
-                                {
-                                    // Exit code non-zero doesn't necessarily mean failure
-                                    // The file might already be unblocked
-                                    _logger.LogDebug("[MR] Unblock attempt for {FileName} returned exit code {Code}", fileName, process.ExitCode);
-                                }
-                            }
-                        }
-                    }
-                    catch (Exception psEx)
-                    {
-                        _logger.LogWarning(psEx, "[MR] PowerShell unblock failed for {FileName}: {Message}", fileName, psEx.Message);
-                        
-                        // Method 2: Try removing the Zone.Identifier alternate data stream directly
-                        try
-                        {
-                            var zoneIdentifierPath = $"{filePath}:Zone.Identifier";
-                            if (File.Exists(zoneIdentifierPath))
-                            {
-                                File.Delete(zoneIdentifierPath);
-                                unblockedCount++;
-                                _logger.LogDebug("[MR] Removed Zone.Identifier for: {FileName}", fileName);
-                            }
-                        }
-                        catch (Exception adsEx)
-                        {
-                            _logger.LogDebug(adsEx, "[MR] Could not remove Zone.Identifier for {FileName}: {Message}", fileName, adsEx.Message);
-                            failedCount++;
-                        }
-                    }
-                }
-                catch (Exception fileEx)
-                {
-                    _logger.LogWarning(fileEx, "[MR] Error processing file {FileName}: {Message}", Path.GetFileName(filePath), fileEx.Message);
-                    failedCount++;
-                }
+                var (unblocked, failed) = TryUnblockSingleFile(filePath);
+                if (unblocked) unblockedCount++;
+                if (failed) failedCount++;
             }
 
             if (unblockedCount > 0 || failedCount > 0)
@@ -416,8 +283,86 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "[MR] Error attempting to unblock plugin files: {Message}", ex.Message);
-            _logger.LogWarning("[MR] Plugin will continue loading - unblocking is optional");
+            _logger.LogWarning(ex, "[MR] Error attempting to unblock plugin files: {Message}. Unblocking is optional.", ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Tries to unblock a single file (PowerShell Unblock-File or Zone.Identifier removal). Returns (unblocked, failed).
+    /// </summary>
+    private (bool unblocked, bool failed) TryUnblockSingleFile(string filePath)
+    {
+        var fileName = Path.GetFileName(filePath);
+        try
+        {
+            if (TryUnblockViaPowerShell(filePath, fileName))
+            {
+                return (true, false);
+            }
+
+            if (TryRemoveZoneIdentifier(filePath, fileName))
+            {
+                return (true, false);
+            }
+
+            return (false, false);
+        }
+        catch (Exception fileEx)
+        {
+            _logger.LogWarning(fileEx, "[MR] Error processing file {FileName}: {Message}", fileName, fileEx.Message);
+            return (false, true);
+        }
+    }
+
+    private bool TryUnblockViaPowerShell(string filePath, string fileName)
+    {
+        try
+        {
+            var processStartInfo = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "powershell.exe",
+                Arguments = $"-Command \"Unblock-File -Path '{filePath.Replace("'", "''")}' -ErrorAction SilentlyContinue\"",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                WindowStyle = System.Diagnostics.ProcessWindowStyle.Hidden
+            };
+
+            using (var process = System.Diagnostics.Process.Start(processStartInfo))
+            {
+                if (process == null) return false;
+                process.WaitForExit(5000);
+                if (process.ExitCode == 0)
+                {
+                    _logger.LogDebug("[MR] Unblocked: {FileName}", fileName);
+                    return true;
+                }
+                _logger.LogDebug("[MR] Unblock attempt for {FileName} returned exit code {Code}", fileName, process.ExitCode);
+                return false;
+            }
+        }
+        catch (Exception psEx)
+        {
+            _logger.LogWarning(psEx, "[MR] PowerShell unblock failed for {FileName}: {Message}", fileName, psEx.Message);
+            return false;
+        }
+    }
+
+    private bool TryRemoveZoneIdentifier(string filePath, string fileName)
+    {
+        try
+        {
+            var zoneIdentifierPath = $"{filePath}:Zone.Identifier";
+            if (!File.Exists(zoneIdentifierPath)) return false;
+            File.Delete(zoneIdentifierPath);
+            _logger.LogDebug("[MR] Removed Zone.Identifier for: {FileName}", fileName);
+            return true;
+        }
+        catch (Exception adsEx)
+        {
+            _logger.LogDebug(adsEx, "[MR] Could not remove Zone.Identifier for {FileName}: {Message}", fileName, adsEx.Message);
+            return false;
         }
     }
 
@@ -595,6 +540,7 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
                                 {
                                     using (var fs = System.IO.File.Open(dllPath, System.IO.FileMode.Open, System.IO.FileAccess.Read, System.IO.FileShare.ReadWrite))
                                     {
+                                        _ = fs.Length; // S108: verify file is readable
                                     }
                                 }
                                 catch (Exception fileEx)
@@ -935,7 +881,7 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IDis
                         {
                             using (var fs = System.IO.File.Open(file, System.IO.FileMode.Open, System.IO.FileAccess.Read, System.IO.FileShare.None))
                             {
-                                // File is not locked
+                                _ = fs.Length; // S108: verify file is not locked
                             }
                         }
                         catch
