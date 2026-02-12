@@ -673,23 +673,21 @@ public class RenameCoordinator
         return (name, year, yearSource);
     }
 
-    private (string newHash, string? oldHash, bool providerIdsChanged, bool isFirstTime, bool hasProviderIds) RunSeriesProviderHashQueueAndBulk(Series series, string name, PluginConfiguration cfg, bool forceProcessing)
+    private static (string newHash, string? oldHash, bool hasOldHash, bool providerIdsChanged, bool isFirstTime, bool hasProviderIds) ComputeSeriesProviderHashState(Series series, Dictionary<Guid, string> providerHashByItem)
     {
         var hasProviderIds = series.ProviderIds != null && series.ProviderIds.Count > 0;
         var newHash = hasProviderIds && series.ProviderIds != null ? ProviderIdHelper.ComputeProviderHash(series.ProviderIds) : string.Empty;
-        var hasOldHash = _providerHashByItem.TryGetValue(series.Id, out var oldHash);
+        var hasOldHash = providerHashByItem.TryGetValue(series.Id, out var oldHash);
         var providerIdsChanged = hasOldHash && !string.Equals(newHash, oldHash, StringComparison.Ordinal);
         var isFirstTime = !hasOldHash;
+        return (newHash, oldHash, hasOldHash, providerIdsChanged, isFirstTime, hasProviderIds);
+    }
 
+    private void LogProviderHashCheck(Series series, string name, PluginConfiguration cfg, bool forceProcessing, string newHash, string? oldHash, bool hasProviderIds, bool providerIdsChanged, bool isFirstTime, bool hasOldHash)
+    {
         DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "B", location = "RenameCoordinator.cs", message = "Provider hash check", data = new { oldHash = oldHash ?? "(none)", newHash = newHash, hasOldHash = hasOldHash, hasProviderIds = hasProviderIds, seriesName = name, providerIds = series.ProviderIds != null ? string.Join(",", series.ProviderIds.Select(kv => $"{kv.Key}={kv.Value}")) : "null", processDuringLibraryScans = cfg.ProcessDuringLibraryScans, onlyRenameWhenProviderIdsChange = cfg.OnlyRenameWhenProviderIdsChange, providerIdsChanged = providerIdsChanged, isFirstTime = isFirstTime }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
         _logger.LogInformation("[MR] === Provider Hash Check ===");
-        _logger.LogInformation("[MR] ProcessDuringLibraryScans: {ProcessDuringLibraryScans}", cfg.ProcessDuringLibraryScans);
-        _logger.LogInformation("[MR] OnlyRenameWhenProviderIdsChange: {OnlyRenameWhenProviderIdsChange}", cfg.OnlyRenameWhenProviderIdsChange);
-        _logger.LogInformation("[MR] Has Provider IDs: {HasProviderIds}", hasProviderIds);
-        _logger.LogInformation("[MR] Old Hash Exists: {HasOldHash}, Value: {OldHash}", hasOldHash, oldHash ?? "(none)");
-        _logger.LogInformation("[MR] New Hash: {NewHash}", newHash);
-        _logger.LogInformation("[MR] Provider IDs Changed: {Changed}, First Time: {FirstTime}", providerIdsChanged, isFirstTime);
-        _logger.LogInformation("[MR] Series: {Name}", name);
+        _logger.LogInformation("[MR] ProcessDuringLibraryScans: {ProcessDuringLibraryScans}, OnlyRenameWhenProviderIdsChange: {OnlyRenameWhenProviderIdsChange}, HasProviderIds: {HasProviderIds}, OldHashExists: {HasOldHash}, NewHash: {NewHash}, ProviderIdsChanged: {Changed}, FirstTime: {FirstTime}, Series: {Name}", cfg.ProcessDuringLibraryScans, cfg.OnlyRenameWhenProviderIdsChange, hasProviderIds, hasOldHash, newHash, providerIdsChanged, isFirstTime, name);
         try
         {
             _logger.LogInformation("[MR] [DEBUG] [PROVIDER-HASH-CHECK] Provider hash check state: SeriesId={SeriesId}, SeriesName='{SeriesName}', OnlyRenameWhenProviderIdsChange={OnlyRenameWhenProviderIdsChange}, HasProviderIds={HasProviderIds}, HasOldHash={HasOldHash}, OldHash={OldHash}, NewHash={NewHash}, ProviderIdsChanged={ProviderIdsChanged}, IsFirstTime={IsFirstTime}, ForceProcessing={ForceProcessing}", series.Id, name ?? "NULL", cfg.OnlyRenameWhenProviderIdsChange, hasProviderIds, hasOldHash, oldHash ?? "(none)", newHash, providerIdsChanged, isFirstTime, forceProcessing);
@@ -700,22 +698,18 @@ public class RenameCoordinator
             _logger.LogError(ex, "[MR] [DEBUG] [PROVIDER-HASH-CHECK] ERROR logging hash check: {Error}", ex.Message);
             DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(new { runId = "run1", hypothesisId = "PROVIDER-HASH-CHECK", location = "RenameCoordinator.cs", message = "ERROR logging hash check", data = new { error = ex.Message }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
         }
+    }
 
-        var currentTime = DateTime.UtcNow;
+    private void EnqueueSeriesUpdateAndCleanup(DateTime currentTime, bool providerIdsChanged, bool isFirstTime, Series series, string name)
+    {
         if (!providerIdsChanged && !isFirstTime)
             _seriesUpdateTimestamps.Enqueue(currentTime);
         else
             _logger.LogInformation("[MR] [DEBUG] [SERIES-UPDATE-QUEUE-SKIP] Skipping queue addition - Provider IDs changed (Identify flow) or first time. ProviderIdsChanged={Changed}, IsFirstTime={FirstTime}", providerIdsChanged, isFirstTime);
         try
         {
-            _logger.LogInformation("[MR] [DEBUG] [SERIES-UPDATE-QUEUE] === Series Update Added to Queue ===");
-            _logger.LogInformation("[MR] [DEBUG] [SERIES-UPDATE-QUEUE] Series: {Name}, ID: {Id}", name ?? "NULL", series.Id);
-            _logger.LogInformation("[MR] [DEBUG] [SERIES-UPDATE-QUEUE] Timestamp: {Timestamp}", currentTime.ToString("yyyy-MM-dd HH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture));
-            _logger.LogInformation("[MR] [DEBUG] [SERIES-UPDATE-QUEUE] Queue size BEFORE adding: {Count}", _seriesUpdateTimestamps.Count - 1);
-            _logger.LogInformation("[MR] [DEBUG] [SERIES-UPDATE-QUEUE] Queue size AFTER adding: {Count}", _seriesUpdateTimestamps.Count);
-            _logger.LogInformation("[MR] [DEBUG] [SERIES-UPDATE-QUEUE] Provider IDs Changed: {Changed}", providerIdsChanged);
-            _logger.LogInformation("[MR] [DEBUG] [SERIES-UPDATE-QUEUE] Is First Time: {IsFirstTime}", isFirstTime);
-            DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(new { runId = "run1", hypothesisId = "SERIES-UPDATE-QUEUE", location = "RenameCoordinator.cs", message = "Series update added to queue", data = new { seriesId = series.Id.ToString(), seriesName = name ?? "NULL", timestamp = currentTime.ToString("yyyy-MM-dd HH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture), queueSizeBefore = providerIdsChanged || isFirstTime ? _seriesUpdateTimestamps.Count : _seriesUpdateTimestamps.Count - 1, queueSizeAfter = _seriesUpdateTimestamps.Count, providerIdsChanged = providerIdsChanged, isFirstTime = isFirstTime, hasProviderIds = hasProviderIds, addedToQueue = !providerIdsChanged && !isFirstTime }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
+            _logger.LogInformation("[MR] [DEBUG] [SERIES-UPDATE-QUEUE] === Series Update Added to Queue === Series: {Name}, ID: {Id}, Timestamp: {Timestamp}, Queue size: {Count}", name ?? "NULL", series.Id, currentTime.ToString("yyyy-MM-dd HH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture), _seriesUpdateTimestamps.Count);
+            DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(new { runId = "run1", hypothesisId = "SERIES-UPDATE-QUEUE", location = "RenameCoordinator.cs", message = "Series update added to queue", data = new { seriesId = series.Id.ToString(), seriesName = name ?? "NULL", timestamp = currentTime.ToString("yyyy-MM-dd HH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture), queueSizeBefore = providerIdsChanged || isFirstTime ? _seriesUpdateTimestamps.Count : _seriesUpdateTimestamps.Count - 1, queueSizeAfter = _seriesUpdateTimestamps.Count, providerIdsChanged = providerIdsChanged, isFirstTime = isFirstTime, addedToQueue = !providerIdsChanged && !isFirstTime }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
         }
         catch (Exception ex) { _logger.LogError(ex, "[MR] [DEBUG] [SERIES-UPDATE-QUEUE] ERROR logging queue addition: {Error}", ex.Message); }
 
@@ -729,31 +723,22 @@ public class RenameCoordinator
         {
             try
             {
-                _logger.LogInformation("[MR] [DEBUG] [SERIES-UPDATE-QUEUE-CLEAN] Removed {Count} old timestamps from queue", timestampsRemoved);
-                _logger.LogInformation("[MR] [DEBUG] [SERIES-UPDATE-QUEUE-CLEAN] Queue size after cleanup: {Count}", _seriesUpdateTimestamps.Count);
+                _logger.LogInformation("[MR] [DEBUG] [SERIES-UPDATE-QUEUE-CLEAN] Removed {Count} old timestamps, queue size after cleanup: {QueueCount}", timestampsRemoved, _seriesUpdateTimestamps.Count);
                 DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(new { runId = "run1", hypothesisId = "SERIES-UPDATE-QUEUE-CLEAN", location = "RenameCoordinator.cs", message = "Old timestamps removed from queue", data = new { seriesId = series.Id.ToString(), seriesName = name ?? "NULL", timestampsRemoved = timestampsRemoved, queueSizeAfterCleanup = _seriesUpdateTimestamps.Count }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
             }
             catch (Exception ex) { _logger.LogError(ex, "[MR] [DEBUG] [SERIES-UPDATE-QUEUE-CLEAN] ERROR logging cleanup: {Error}", ex.Message); }
         }
+    }
 
+    private void MaybeTriggerBulkProcessing(Series series, string name, PluginConfiguration cfg, DateTime currentTime, bool providerIdsChanged, bool isFirstTime, bool hasProviderIds)
+    {
         var isBulkRefresh = _seriesUpdateTimestamps.Count >= BulkUpdateThreshold;
         var timeSinceLastBulkProcessing = (currentTime - _lastBulkProcessingUtc).TotalMinutes;
-        var seriesIsIdentified = hasProviderIds;
-        var shouldTriggerBulkProcessing = isBulkRefresh && timeSinceLastBulkProcessing >= BulkProcessingCooldownMinutes && !providerIdsChanged && !isFirstTime && seriesIsIdentified;
+        var shouldTriggerBulkProcessing = isBulkRefresh && timeSinceLastBulkProcessing >= BulkProcessingCooldownMinutes && !providerIdsChanged && !isFirstTime && hasProviderIds;
         try
         {
-            _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] === Bulk Processing Detection ===");
-            _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] Series: {Name}, ID: {Id}", name ?? "NULL", series.Id);
-            _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] Series updates in queue: {Count}", _seriesUpdateTimestamps.Count);
-            _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] Bulk update threshold: {Threshold}", BulkUpdateThreshold);
-            _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] Time window: {Seconds} seconds", BulkUpdateTimeWindowSeconds);
-            _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] isBulkRefresh (count >= threshold): {IsBulkRefresh}", isBulkRefresh);
-            _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] Time since last bulk processing: {Minutes} minutes (cooldown: {CooldownMinutes} minutes)", timeSinceLastBulkProcessing, BulkProcessingCooldownMinutes);
-            _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] providerIdsChanged: {Changed}", providerIdsChanged);
-            _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] isFirstTime: {IsFirstTime}", isFirstTime);
-            _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] seriesIsIdentified: {IsIdentified}", seriesIsIdentified);
-            _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] shouldTriggerBulkProcessing: {ShouldTrigger}", shouldTriggerBulkProcessing);
-            DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(new { runId = "run1", hypothesisId = "BULK-PROCESSING-DETECTION", location = "RenameCoordinator.cs", message = "Bulk processing detection", data = new { seriesId = series.Id.ToString(), seriesName = name ?? "NULL", seriesUpdatesInQueue = _seriesUpdateTimestamps.Count, bulkUpdateThreshold = BulkUpdateThreshold, bulkUpdateTimeWindowSeconds = BulkUpdateTimeWindowSeconds, isBulkRefresh = isBulkRefresh, timeSinceLastBulkProcessing = timeSinceLastBulkProcessing, bulkProcessingCooldownMinutes = BulkProcessingCooldownMinutes, providerIdsChanged = providerIdsChanged, isFirstTime = isFirstTime, seriesIsIdentified = seriesIsIdentified, shouldTriggerBulkProcessing = shouldTriggerBulkProcessing }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
+            _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] === Bulk Processing Detection === Series: {Name}, ID: {Id}, Queue: {Count}, Threshold: {Threshold}, isBulkRefresh: {IsBulkRefresh}, TimeSinceLastBulk: {Minutes}min, shouldTrigger: {ShouldTrigger}", name ?? "NULL", series.Id, _seriesUpdateTimestamps.Count, BulkUpdateThreshold, isBulkRefresh, timeSinceLastBulkProcessing, shouldTriggerBulkProcessing);
+            DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(new { runId = "run1", hypothesisId = "BULK-PROCESSING-DETECTION", location = "RenameCoordinator.cs", message = "Bulk processing detection", data = new { seriesId = series.Id.ToString(), seriesName = name ?? "NULL", seriesUpdatesInQueue = _seriesUpdateTimestamps.Count, bulkUpdateThreshold = BulkUpdateThreshold, isBulkRefresh = isBulkRefresh, timeSinceLastBulkProcessing = timeSinceLastBulkProcessing, providerIdsChanged = providerIdsChanged, isFirstTime = isFirstTime, seriesIsIdentified = hasProviderIds, shouldTriggerBulkProcessing = shouldTriggerBulkProcessing }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
         }
         catch (Exception ex) { _logger.LogError(ex, "[MR] [DEBUG] [BULK-PROCESSING-DETECTION] ERROR logging bulk processing detection: {Error}", ex.Message); }
 
@@ -761,22 +746,27 @@ public class RenameCoordinator
         {
             try
             {
-                _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-TRIGGERED] ===== BULK PROCESSING TRIGGERED =====");
-                _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-TRIGGERED] Series that triggered it: {Name}, ID: {Id}", name ?? "NULL", series.Id);
-                _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-TRIGGERED] Queue size: {Count}", _seriesUpdateTimestamps.Count);
-                DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(new { runId = "run1", hypothesisId = "BULK-PROCESSING-TRIGGERED", location = "RenameCoordinator.cs", message = "Bulk processing triggered", data = new { triggeringSeriesId = series.Id.ToString(), triggeringSeriesName = name ?? "NULL", queueSize = _seriesUpdateTimestamps.Count, providerIdsChanged = providerIdsChanged, isFirstTime = isFirstTime, seriesIsIdentified = seriesIsIdentified, timeSinceLastBulkProcessing = timeSinceLastBulkProcessing }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
+                _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-TRIGGERED] ===== BULK PROCESSING TRIGGERED ===== Series: {Name}, ID: {Id}, Queue size: {Count}", name ?? "NULL", series.Id, _seriesUpdateTimestamps.Count);
+                DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(new { runId = "run1", hypothesisId = "BULK-PROCESSING-TRIGGERED", location = "RenameCoordinator.cs", message = "Bulk processing triggered", data = new { triggeringSeriesId = series.Id.ToString(), triggeringSeriesName = name ?? "NULL", queueSize = _seriesUpdateTimestamps.Count, providerIdsChanged = providerIdsChanged, isFirstTime = isFirstTime, timeSinceLastBulkProcessing = timeSinceLastBulkProcessing }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
             }
             catch (Exception ex) { _logger.LogError(ex, "[MR] [DEBUG] [BULK-PROCESSING-TRIGGERED] ERROR logging trigger: {Error}", ex.Message); }
-            _logger.LogInformation("[MR] === Bulk Refresh Detected (Replace All Metadata) ===");
-            _logger.LogInformation("[MR] Detected {Count} series updates in {Seconds} seconds", _seriesUpdateTimestamps.Count, BulkUpdateTimeWindowSeconds);
-            _logger.LogInformation("[MR] Provider IDs unchanged - this indicates 'Replace all metadata' operation");
-            _logger.LogInformation("[MR] Triggering bulk processing of all series in library...");
+            _logger.LogInformation("[MR] === Bulk Refresh Detected (Replace All Metadata) === Detected {Count} series updates in {Seconds}s. Triggering bulk processing.", _seriesUpdateTimestamps.Count, BulkUpdateTimeWindowSeconds);
             _lastBulkProcessingUtc = currentTime;
             _seriesUpdateTimestamps.Clear();
             Task.Run(() => ProcessAllSeriesInLibrary(cfg, currentTime));
         }
         else if (isBulkRefresh && (providerIdsChanged || isFirstTime))
             _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] Skipping bulk processing - Provider IDs changed (Identify flow detected)");
+    }
+
+    private (string newHash, string? oldHash, bool providerIdsChanged, bool isFirstTime, bool hasProviderIds) RunSeriesProviderHashQueueAndBulk(Series series, string name, PluginConfiguration cfg, bool forceProcessing)
+    {
+        var (newHash, oldHash, hasOldHash, providerIdsChanged, isFirstTime, hasProviderIds) = ComputeSeriesProviderHashState(series, _providerHashByItem);
+        LogProviderHashCheck(series, name, cfg, forceProcessing, newHash, oldHash, hasProviderIds, providerIdsChanged, isFirstTime, hasOldHash);
+
+        var currentTime = DateTime.UtcNow;
+        EnqueueSeriesUpdateAndCleanup(currentTime, providerIdsChanged, isFirstTime, series, name);
+        MaybeTriggerBulkProcessing(series, name, cfg, currentTime, providerIdsChanged, isFirstTime, hasProviderIds);
 
         return (newHash, oldHash, providerIdsChanged, isFirstTime, hasProviderIds);
     }
