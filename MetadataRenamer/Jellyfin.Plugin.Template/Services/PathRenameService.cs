@@ -37,6 +37,22 @@ public class PathRenameService
 
         try
         {
+            // Safeguard: reject null series
+            if (series == null)
+            {
+                _logger.LogError("[MR] [SAFEGUARD] TryRenameSeriesFolder: series is null. Aborting.");
+                return false;
+            }
+
+            // Safeguard: desired folder name must be valid (non-empty, safe for filesystem)
+            if (!SafeName.IsValidFolderOrFileName(desiredFolderName))
+            {
+                _logger.LogWarning("[MR] [SAFEGUARD] TryRenameSeriesFolder: desired folder name is null, empty, or invalid. Series: {Name}, Id: {Id}. Aborting.",
+                    series.Name ?? "NULL", series.Id);
+                return false;
+            }
+
+            desiredFolderName = SafeName.SanitizeFileName(desiredFolderName?.Trim() ?? string.Empty);
             _logger.LogInformation("[MR] === TryRenameSeriesFolder Called ===");
             _logger.LogInformation("[MR] Series: {Name}, ID: {Id}", series.Name, series.Id);
             _logger.LogInformation("[MR] Desired Folder Name: {Desired}", desiredFolderName);
@@ -138,7 +154,7 @@ public class PathRenameService
             if (dryRun)
             {
                 // #region agent log
-                try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "D", location = "PathRenameService.cs:66", message = "DRY RUN - not renaming", data = new { from = currentPath, to = newFullPath }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+                DebugLogHelper.SafeAppend( System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "D", location = "PathRenameService.cs:66", message = "DRY RUN - not renaming", data = new { from = currentPath, to = newFullPath }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
                 // #endregion
                 _logger.LogWarning("[MR] DRY RUN MODE: Would rename {From} -> {To}", currentPath, newFullPath);
                 _logger.LogWarning("[MR] DRY RUN: No actual rename performed. Disable Dry Run mode to perform actual renames.");
@@ -150,13 +166,13 @@ public class PathRenameService
             _logger.LogInformation("[MR] To: {To}", newFullPath);
 
             // #region agent log
-            try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "D", location = "PathRenameService.cs:74", message = "ACTUAL RENAME starting", data = new { from = currentPath, to = newFullPath }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+            DebugLogHelper.SafeAppend( System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "D", location = "PathRenameService.cs:74", message = "ACTUAL RENAME starting", data = new { from = currentPath, to = newFullPath }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
             // #endregion
             
             Directory.Move(currentPath, newFullPath);
             
             // #region agent log
-            try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "D", location = "PathRenameService.cs:76", message = "RENAME SUCCESS", data = new { from = currentPath, to = newFullPath }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+            DebugLogHelper.SafeAppend( System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "D", location = "PathRenameService.cs:76", message = "RENAME SUCCESS", data = new { from = currentPath, to = newFullPath }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
             // #endregion
             
             _logger.LogInformation("[MR] ✓✓✓ SUCCESS: Folder renamed successfully!");
@@ -178,7 +194,7 @@ public class PathRenameService
         catch (UnauthorizedAccessException ex)
         {
             // #region agent log
-            try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "D", location = "PathRenameService.cs:80", message = "RENAME FAILED - UnauthorizedAccess", data = new { from = currentPath, to = newFullPath, error = ex.Message }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+            DebugLogHelper.SafeAppend( System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "D", location = "PathRenameService.cs:80", message = "RENAME FAILED - UnauthorizedAccess", data = new { from = currentPath, to = newFullPath, error = ex.Message }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
             // #endregion
             _logger.LogError(ex, "[MR] ERROR: UnauthorizedAccessException - Permission denied. From: {From}, To: {To}", currentPath, newFullPath);
             return false;
@@ -191,7 +207,7 @@ public class PathRenameService
         catch (IOException ex)
         {
             // #region agent log
-            try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "D", location = "PathRenameService.cs:80", message = "RENAME FAILED - IOException", data = new { from = currentPath, to = newFullPath, error = ex.Message }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+            DebugLogHelper.SafeAppend( System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "D", location = "PathRenameService.cs:80", message = "RENAME FAILED - IOException", data = new { from = currentPath, to = newFullPath, error = ex.Message }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
             // #endregion
             _logger.LogError(ex, "[MR] ERROR: IOException - File system error. From: {From}, To: {To}, Message: {Message}", currentPath, newFullPath, ex.Message);
             return false;
@@ -199,7 +215,7 @@ public class PathRenameService
         catch (Exception ex)
         {
             // #region agent log
-            try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "D", location = "PathRenameService.cs:80", message = "RENAME FAILED", data = new { from = currentPath, to = newFullPath, error = ex.Message, exceptionType = ex.GetType().Name }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n"); } catch { }
+            DebugLogHelper.SafeAppend( System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "D", location = "PathRenameService.cs:80", message = "RENAME FAILED", data = new { from = currentPath, to = newFullPath, error = ex.Message, exceptionType = ex.GetType().Name }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
             // #endregion
             _logger.LogError(ex, "[MR] ERROR: Unexpected exception during rename. Type: {Type}, Message: {Message}", ex.GetType().Name, ex.Message);
             _logger.LogError("[MR] Stack Trace: {StackTrace}", ex.StackTrace ?? "N/A");
@@ -220,6 +236,22 @@ public class PathRenameService
 
         try
         {
+            // Safeguard: reject null season
+            if (season == null)
+            {
+                _logger.LogError("[MR] [SAFEGUARD] TryRenameSeasonFolder: season is null. Aborting.");
+                return;
+            }
+
+            // Safeguard: desired folder name must be valid
+            if (!SafeName.IsValidFolderOrFileName(desiredFolderName))
+            {
+                _logger.LogWarning("[MR] [SAFEGUARD] TryRenameSeasonFolder: desired folder name is null, empty, or invalid. Season: {Name}, Id: {Id}, SeasonNumber: {SeasonNumber}. Aborting.",
+                    season.Name ?? "NULL", season.Id, season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+                return;
+            }
+
+            desiredFolderName = SafeName.SanitizeFileName(desiredFolderName?.Trim() ?? string.Empty);
             _logger.LogInformation("[MR] [DEBUG] [SEASON-RENAME-SERVICE-ENTRY] === TryRenameSeasonFolder Called ===");
             _logger.LogInformation("[MR] [DEBUG] [SEASON-RENAME-SERVICE-ENTRY] Season: {Name}, ID: {Id}, Season Number: {SeasonNumber}", 
                 season.Name ?? "NULL", season.Id, season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
@@ -368,6 +400,27 @@ public class PathRenameService
 
         try
         {
+            // Safeguard: reject null episode
+            if (episode == null)
+            {
+                _logger.LogError("[MR] [SAFEGUARD] TryRenameEpisodeFile: episode is null. Aborting.");
+                return;
+            }
+
+            // Safeguard: desired file name must be valid (non-empty, safe for filesystem)
+            if (!SafeName.IsValidFolderOrFileName(desiredFileName))
+            {
+                _logger.LogWarning("[MR] [SAFEGUARD] TryRenameEpisodeFile: desired file name is null, empty, or invalid. EpisodeId: {Id}, Name: {Name}. Aborting.",
+                    episode.Id, episode.Name ?? "NULL");
+                return;
+            }
+
+            desiredFileName = SafeName.SanitizeFileName(desiredFileName?.Trim() ?? string.Empty);
+            if (string.IsNullOrWhiteSpace(fileExtension))
+                fileExtension = Path.GetExtension(episode.Path ?? ".mkv");
+            if (!fileExtension.StartsWith(".", StringComparison.Ordinal))
+                fileExtension = "." + fileExtension;
+
             var seasonNumber = episode.ParentIndexNumber;
             var isSeason2Plus = seasonNumber.HasValue && seasonNumber.Value >= 2;
             if (isSeason2Plus)
@@ -414,7 +467,7 @@ public class PathRenameService
                         timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
                     };
                     var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                    try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+                    DebugLogHelper.SafeAppend( logJson);
                 }
                 catch (Exception logEx)
                 {
@@ -468,6 +521,16 @@ public class PathRenameService
             newFullPath = Path.Combine(directory.FullName, newFileName);
             _logger.LogInformation("[MR] New Full Path: {NewPath}", newFullPath);
 
+            // Safeguard: ensure desired filename SxxExx matches episode metadata (never rename to wrong season/episode)
+            if (!SafeName.DesiredEpisodeFileNameMatchesMetadata(desiredFileName, episode.ParentIndexNumber, episode.IndexNumber))
+            {
+                _logger.LogError("[MR] [SAFEGUARD] TryRenameEpisodeFile: desired filename SxxExx does not match episode metadata. Desired: '{Desired}', Metadata S{Season}E{Episode}. Aborting.",
+                    desiredFileName,
+                    episode.ParentIndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "?",
+                    episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "?");
+                return;
+            }
+
             if (File.Exists(newFullPath))
             {
                 // Check if target file is the same as source (same path or same file)
@@ -479,35 +542,28 @@ public class PathRenameService
                 var filesAreSame = isSameFile || (targetFileSize == sourceFileSize && targetFileSize > 0);
                 
                 // #region agent log - DUPLICATE-TARGET-FILENAME: Track when target file already exists
-                try
-                {
-                    System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", 
-                        System.Text.Json.JsonSerializer.Serialize(new {
-                            runId = "run1",
-                            hypothesisId = "DUPLICATE-TARGET-FILENAME",
-                            location = "PathRenameService.cs:471",
-                            message = "Target file already exists - checking if same file",
-                            data = new {
-                                episodeId = episode.Id.ToString(),
-                                episodeName = episode.Name ?? "NULL",
-                                seasonNumber = seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
-                                episodeNumber = episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
-                                isSeason2Plus = isSeason2Plus,
-                                sourcePath = currentPath,
-                                targetPath = newFullPath,
-                                isSameFile = isSameFile,
-                                sourceFileSize = sourceFileSize,
-                                targetFileSize = targetFileSize,
-                                filesAreSame = filesAreSame,
-                                desiredFileName = desiredFileName + fileExtension
-                            },
-                            timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-                        }) + "\n");
-                }
-                catch (Exception logEx)
-                {
-                    _logger.LogError(logEx, "[MR] [DEBUG] [DUPLICATE-TARGET-FILENAME] ERROR logging: {Error}", logEx.Message);
-                }
+                DebugLogHelper.SafeAppend(
+                    System.Text.Json.JsonSerializer.Serialize(new {
+                        runId = "run1",
+                        hypothesisId = "DUPLICATE-TARGET-FILENAME",
+                        location = "PathRenameService.cs:471",
+                        message = "Target file already exists - checking if same file",
+                        data = new {
+                            episodeId = episode.Id.ToString(),
+                            episodeName = episode.Name ?? "NULL",
+                            seasonNumber = seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                            episodeNumber = episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
+                            isSeason2Plus = isSeason2Plus,
+                            sourcePath = currentPath,
+                            targetPath = newFullPath,
+                            isSameFile = isSameFile,
+                            sourceFileSize = sourceFileSize,
+                            targetFileSize = targetFileSize,
+                            filesAreSame = filesAreSame,
+                            desiredFileName = desiredFileName + fileExtension
+                        },
+                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                    }) + "\n");
                 // #endregion
                 
                 if (filesAreSame)
@@ -570,7 +626,7 @@ public class PathRenameService
                         timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
                     };
                     var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                    try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+                    DebugLogHelper.SafeAppend( logJson);
                 }
                 catch (Exception logEx)
                 {
@@ -615,7 +671,7 @@ public class PathRenameService
                         timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
                     };
                     var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                    try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+                    DebugLogHelper.SafeAppend( logJson);
                 }
                 catch (Exception logEx)
                 {
@@ -662,7 +718,7 @@ public class PathRenameService
                         timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
                     };
                     var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                    try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+                    DebugLogHelper.SafeAppend( logJson);
                 }
                 catch { }
             }
@@ -695,7 +751,7 @@ public class PathRenameService
                         timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
                     };
                     var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                    try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+                    DebugLogHelper.SafeAppend( logJson);
                 }
                 catch { }
             }
@@ -729,7 +785,7 @@ public class PathRenameService
                         timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
                     };
                     var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                    try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+                    DebugLogHelper.SafeAppend( logJson);
                 }
                 catch { }
             }
@@ -765,7 +821,7 @@ public class PathRenameService
                         timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
                     };
                     var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                    try { System.IO.File.AppendAllText(@"d:\Jellyfin Projects\Jellyfin_Metadata_tool\.cursor\debug.log", logJson); } catch { }
+                    DebugLogHelper.SafeAppend( logJson);
                 }
                 catch { }
             }
@@ -787,6 +843,22 @@ public class PathRenameService
 
         try
         {
+            // Safeguard: reject null movie
+            if (movie == null)
+            {
+                _logger.LogError("[MR] [SAFEGUARD] TryRenameMovieFolder: movie is null. Aborting.");
+                return false;
+            }
+
+            // Safeguard: desired folder name must be valid
+            if (!SafeName.IsValidFolderOrFileName(desiredFolderName))
+            {
+                _logger.LogWarning("[MR] [SAFEGUARD] TryRenameMovieFolder: desired folder name is null, empty, or invalid. Movie: {Name}, Id: {Id}. Aborting.",
+                    movie.Name ?? "NULL", movie.Id);
+                return false;
+            }
+
+            desiredFolderName = SafeName.SanitizeFileName(desiredFolderName?.Trim() ?? string.Empty);
             _logger.LogInformation("[MR] === TryRenameMovieFolder Called ===");
             _logger.LogInformation("[MR] Movie: {Name}, ID: {Id}", movie.Name, movie.Id);
             _logger.LogInformation("[MR] Desired Folder Name: {Desired}", desiredFolderName);

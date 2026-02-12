@@ -251,6 +251,40 @@ public static class SafeName
     }
 
     /// <summary>
+    /// Returns true if the string is safe to use as a folder or file name (non-empty after sanitization, no invalid chars).
+    /// Use as a safeguard before rename operations.
+    /// </summary>
+    public static bool IsValidFolderOrFileName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            return false;
+        var sanitized = SanitizeFileName(name.Trim());
+        return sanitized.Length > 0 && !string.Equals(sanitized, "Unknown", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Validates that a desired episode filename contains the expected season and episode numbers from metadata.
+    /// Use as a safeguard to ensure we never write the wrong SxxExx to disk.
+    /// </summary>
+    /// <param name="desiredFileNameWithoutExtension">The desired filename (no extension).</param>
+    /// <param name="seasonNumber">Expected season number from metadata.</param>
+    /// <param name="episodeNumber">Expected episode number from metadata.</param>
+    /// <returns>True if filename contains the expected SxxExx (or metadata is null so we skip check).</returns>
+    public static bool DesiredEpisodeFileNameMatchesMetadata(string desiredFileNameWithoutExtension, int? seasonNumber, int? episodeNumber)
+    {
+        if (string.IsNullOrWhiteSpace(desiredFileNameWithoutExtension))
+            return false;
+        if (!seasonNumber.HasValue || !episodeNumber.HasValue)
+            return true; // No metadata to validate against
+        var match = Regex.Match(desiredFileNameWithoutExtension, @"[Ss](\d+)[Ee](\d+)", RegexOptions.IgnoreCase);
+        if (!match.Success || match.Groups.Count < 3)
+            return true; // No SxxExx in format; cannot validate
+        if (!int.TryParse(match.Groups[1].Value, out var s) || !int.TryParse(match.Groups[2].Value, out var e))
+            return true;
+        return s == seasonNumber.Value && e == episodeNumber.Value;
+    }
+
+    /// <summary>
     /// Sanitizes a filename by removing invalid filesystem characters.
     /// </summary>
     /// <param name="input">The input string to sanitize.</param>

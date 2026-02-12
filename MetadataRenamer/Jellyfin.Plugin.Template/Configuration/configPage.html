@@ -165,7 +165,7 @@
                     config.PreferredMovieProviders = movieProvidersText ? movieProvidersText.split(',').map(function(p) { return p.trim(); }).filter(function(p) { return p.length > 0; }) : [];
                     config.OnlyRenameWhenProviderIdsChange = document.querySelector('#OnlyRenameWhenProviderIdsChange').checked;
                     config.ProcessDuringLibraryScans = document.querySelector('#ProcessDuringLibraryScans').checked;
-                    config.PerItemCooldownSeconds = parseInt(document.querySelector('#PerItemCooldownSeconds').value) || 60;
+                    config.PerItemCooldownSeconds = Number.parseInt(document.querySelector('#PerItemCooldownSeconds').value, 10) || 60;
                     ApiClient.updatePluginConfiguration(MetadataRenamerConfig.pluginUniqueId, config).then(function (result) {
                         Dashboard.processPluginConfigurationUpdateResult(result);
                     });
