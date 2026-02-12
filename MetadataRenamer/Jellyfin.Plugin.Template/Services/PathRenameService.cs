@@ -410,14 +410,11 @@ public class PathRenameService
 
         try
         {
-            // Safeguard: reject null episode
             if (episode == null)
             {
                 _logger.LogError("[MR] [SAFEGUARD] TryRenameEpisodeFile: episode is null. Aborting.");
                 return;
             }
-
-            // Safeguard: desired file name must be valid (non-empty, safe for filesystem)
             if (!SafeName.IsValidFolderOrFileName(desiredFileName))
             {
                 _logger.LogWarning("[MR] [SAFEGUARD] TryRenameEpisodeFile: desired file name is null, empty, or invalid. EpisodeId: {Id}, Name: {Name}. Aborting.",
@@ -425,113 +422,13 @@ public class PathRenameService
                 return;
             }
 
-            desiredFileName = SafeName.SanitizeFileName(desiredFileName?.Trim() ?? string.Empty);
-            if (string.IsNullOrWhiteSpace(fileExtension))
-                fileExtension = Path.GetExtension(episode.Path ?? ".mkv");
-            if (!fileExtension.StartsWith(".", StringComparison.Ordinal))
-                fileExtension = "." + fileExtension;
-
+            NormalizeEpisodeFileInput(ref desiredFileName, ref fileExtension, episode.Path);
             var seasonNumber = episode.ParentIndexNumber;
             var isSeason2Plus = seasonNumber.HasValue && seasonNumber.Value >= 2;
-            if (isSeason2Plus)
-            {
-                _logger.LogWarning("[MR] === TryRenameEpisodeFile Called (Season 2+) ===");
-                _logger.LogWarning("[MR] Episode: {Name}, ID: {Id}", episode.Name, episode.Id);
-                _logger.LogWarning("[MR] Season: {Season}, Episode: {Episode} (Season2Plus={IsSeason2Plus})", 
-                    seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
-                    episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
-                    isSeason2Plus);
-                _logger.LogWarning("[MR] Desired File Name: {Desired}", desiredFileName + fileExtension);
-                _logger.LogWarning("[MR] Dry Run: {DryRun}", dryRun);
-            }
-            else
-            {
-                _logger.LogInformation("[MR] === TryRenameEpisodeFile Called ===");
-                _logger.LogInformation("[MR] Episode: {Name}, ID: {Id}", episode.Name, episode.Id);
-                _logger.LogInformation("[MR] Season: {Season}, Episode: {Episode}", 
-                    seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
-                    episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
-                _logger.LogInformation("[MR] Desired File Name: {Desired}", desiredFileName + fileExtension);
-                _logger.LogInformation("[MR] Dry Run: {DryRun}", dryRun);
-            }
-            
-            // #region agent log - MULTI-SEASON-RENAME-ENTRY: Track Season 2+ rename entry
-            if (isSeason2Plus)
-            {
-                try
-                {
-                    var logData = new {
-                        runId = "run1",
-                        hypothesisId = "MULTI-SEASON-RENAME-ENTRY",
-                        location = "PathRenameService.cs:371",
-                        message = "TryRenameEpisodeFile called for Season 2+ episode",
-                        data = new {
-                            episodeId = episode.Id.ToString(),
-                            episodeName = episode.Name ?? "NULL",
-                            seasonNumber = seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
-                            episodeNumber = episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
-                            desiredFileName = desiredFileName + fileExtension,
-                            dryRun = dryRun,
-                            currentPath = overridePath ?? episode.Path ?? "NULL"
-                        },
-                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-                    };
-                    var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                    DebugLogHelper.SafeAppend( logJson);
-                }
-                catch (Exception logEx)
-                {
-                    _logger.LogError(logEx, "[MR] [DEBUG] [MULTI-SEASON-RENAME-ENTRY] ERROR logging: {Error}", logEx.Message);
-                }
-            }
-            // #endregion
+            LogEpisodeRenameEntry(episode, desiredFileName, fileExtension, dryRun, overridePath, isSeason2Plus, seasonNumber);
 
-            currentPath = overridePath ?? episode.Path;
-            if (!string.IsNullOrWhiteSpace(overridePath))
-            {
-                _logger.LogInformation("[MR] Using override path (file was moved): {Path}", overridePath);
-            }
-            if (string.IsNullOrWhiteSpace(currentPath))
-            {
-                _logger.LogWarning("[MR] SKIP: Episode.Path is null or empty");
+            if (!TryResolveEpisodePaths(episode, overridePath, desiredFileName, fileExtension, out currentPath, out newFullPath))
                 return;
-            }
-
-            _logger.LogInformation("[MR] Current Path: {Path}", currentPath);
-
-            var currentFile = new FileInfo(currentPath);
-            if (!currentFile.Exists)
-            {
-                _logger.LogError("[MR] ERROR: Episode file does not exist: {Path}", currentPath);
-                return;
-            }
-
-            _logger.LogInformation("[MR] Current File Name: {Name}", currentFile.Name);
-            _logger.LogInformation("[MR] Current File Exists: {Exists}", currentFile.Exists);
-
-            var directory = currentFile.Directory;
-            if (directory == null)
-            {
-                _logger.LogError("[MR] ERROR: Cannot determine directory for file: {Path}", currentPath);
-                return;
-            }
-
-            _logger.LogInformation("[MR] Directory: {Directory}", directory.FullName);
-
-            var currentFileNameWithoutExt = Path.GetFileNameWithoutExtension(currentFile.Name);
-            var newFileName = desiredFileName + fileExtension;
-
-            if (string.Equals(currentFileNameWithoutExt, desiredFileName, StringComparison.OrdinalIgnoreCase))
-            {
-                _logger.LogInformation("[MR] SKIP: File name already matches desired name. Current: {Current}, Desired: {Desired}", 
-                    currentFileNameWithoutExt, desiredFileName);
-                return;
-            }
-
-            newFullPath = Path.Combine(directory.FullName, newFileName);
-            _logger.LogInformation("[MR] New Full Path: {NewPath}", newFullPath);
-
-            // Safeguard: ensure desired filename SxxExx matches episode metadata (never rename to wrong season/episode)
             if (!SafeName.DesiredEpisodeFileNameMatchesMetadata(desiredFileName, episode.ParentIndexNumber, episode.IndexNumber))
             {
                 _logger.LogError("[MR] [SAFEGUARD] TryRenameEpisodeFile: desired filename SxxExx does not match episode metadata. Desired: '{Desired}', Metadata S{Season}E{Episode}. Aborting.",
@@ -540,60 +437,8 @@ public class PathRenameService
                     episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "?");
                 return;
             }
-
-            if (File.Exists(newFullPath))
-            {
-                // Check if target file is the same as source (same path or same file)
-                var targetFileInfo = new FileInfo(newFullPath);
-                var sourceFileInfo = new FileInfo(currentPath);
-                var isSameFile = string.Equals(currentPath, newFullPath, StringComparison.OrdinalIgnoreCase);
-                var targetFileSize = targetFileInfo.Exists ? targetFileInfo.Length : -1;
-                var sourceFileSize = sourceFileInfo.Exists ? sourceFileInfo.Length : -1;
-                var filesAreSame = isSameFile || (targetFileSize == sourceFileSize && targetFileSize > 0);
-                
-                // #region agent log - DUPLICATE-TARGET-FILENAME: Track when target file already exists
-                DebugLogHelper.SafeAppend(
-                    System.Text.Json.JsonSerializer.Serialize(new {
-                        runId = "run1",
-                        hypothesisId = "DUPLICATE-TARGET-FILENAME",
-                        location = "PathRenameService.cs:471",
-                        message = "Target file already exists - checking if same file",
-                        data = new {
-                            episodeId = episode.Id.ToString(),
-                            episodeName = episode.Name ?? "NULL",
-                            seasonNumber = seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
-                            episodeNumber = episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
-                            isSeason2Plus = isSeason2Plus,
-                            sourcePath = currentPath,
-                            targetPath = newFullPath,
-                            isSameFile = isSameFile,
-                            sourceFileSize = sourceFileSize,
-                            targetFileSize = targetFileSize,
-                            filesAreSame = filesAreSame,
-                            desiredFileName = desiredFileName + fileExtension
-                        },
-                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-                    }) + "\n");
-                // #endregion
-                
-                if (filesAreSame)
-                {
-                    _logger.LogInformation("[MR] Target file already exists and is the same as source. File already renamed correctly. From: {From}, To: {To}", currentPath, newFullPath);
-                    return;
-                }
-                
-                // Target file exists and is different - this indicates duplicate episode metadata in Jellyfin
-                // The plugin uses Jellyfin's metadata as-is, so if multiple episodes have the same metadata,
-                // they will try to rename to the same target. This is a Jellyfin metadata issue that needs
-                // to be fixed in Jellyfin (correct episode numbers and titles).
-                _logger.LogError("[MR] ERROR: Target file already exists with different content. This indicates duplicate episode metadata in Jellyfin (multiple episodes mapped to the same episode number/title). From: {From}, To: {To}, EpisodeId: {EpisodeId}, Season: {Season}, Episode: {Episode}", 
-                    currentPath, newFullPath, episode.Id,
-                    seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
-                    episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
-                _logger.LogError("[MR] Please fix the episode metadata in Jellyfin (correct episode numbers and titles) and try again.");
+            if (CheckEpisodeTargetConflict(episode, currentPath, newFullPath, desiredFileName, fileExtension, isSeason2Plus, seasonNumber))
                 return;
-            }
-
             if (dryRun)
             {
                 _logger.LogWarning("[MR] DRY RUN MODE: Would rename {From} -> {To}", currentPath, newFullPath);
@@ -608,6 +453,105 @@ public class PathRenameService
         {
             LogEpisodeRenameException(ex, currentPath, newFullPath, episode);
         }
+    }
+
+    private static void NormalizeEpisodeFileInput(ref string desiredFileName, ref string fileExtension, string episodePath)
+    {
+        desiredFileName = SafeName.SanitizeFileName(desiredFileName?.Trim() ?? string.Empty);
+        if (string.IsNullOrWhiteSpace(fileExtension))
+            fileExtension = Path.GetExtension(episodePath ?? ".mkv");
+        if (!fileExtension.StartsWith(".", StringComparison.Ordinal))
+            fileExtension = "." + fileExtension;
+    }
+
+    private bool TryResolveEpisodePaths(Episode episode, string overridePath, string desiredFileName, string fileExtension, out string currentPath, out string newFullPath)
+    {
+        currentPath = overridePath ?? episode.Path;
+        newFullPath = string.Empty;
+        if (!string.IsNullOrWhiteSpace(overridePath))
+            _logger.LogInformation("[MR] Using override path (file was moved): {Path}", overridePath);
+        if (string.IsNullOrWhiteSpace(currentPath))
+        {
+            _logger.LogWarning("[MR] SKIP: Episode.Path is null or empty");
+            return false;
+        }
+        _logger.LogInformation("[MR] Current Path: {Path}", currentPath);
+        var currentFile = new FileInfo(currentPath);
+        if (!currentFile.Exists)
+        {
+            _logger.LogError("[MR] ERROR: Episode file does not exist: {Path}", currentPath);
+            return false;
+        }
+        _logger.LogInformation("[MR] Current File Name: {Name}", currentFile.Name);
+        _logger.LogInformation("[MR] Current File Exists: {Exists}", currentFile.Exists);
+        var directory = currentFile.Directory;
+        if (directory == null)
+        {
+            _logger.LogError("[MR] ERROR: Cannot determine directory for file: {Path}", currentPath);
+            return false;
+        }
+        _logger.LogInformation("[MR] Directory: {Directory}", directory.FullName);
+        var currentFileNameWithoutExt = Path.GetFileNameWithoutExtension(currentFile.Name);
+        var newFileName = desiredFileName + fileExtension;
+        if (string.Equals(currentFileNameWithoutExt, desiredFileName, StringComparison.OrdinalIgnoreCase))
+        {
+            _logger.LogInformation("[MR] SKIP: File name already matches desired name. Current: {Current}, Desired: {Desired}",
+                currentFileNameWithoutExt, desiredFileName);
+            return false;
+        }
+        newFullPath = Path.Combine(directory.FullName, newFileName);
+        _logger.LogInformation("[MR] New Full Path: {NewPath}", newFullPath);
+        return true;
+    }
+
+    private void LogEpisodeRenameEntry(Episode episode, string desiredFileName, string fileExtension, bool dryRun, string overridePath, bool isSeason2Plus, int? seasonNumber)
+    {
+        if (isSeason2Plus)
+        {
+            _logger.LogWarning("[MR] === TryRenameEpisodeFile Called (Season 2+) ===");
+            _logger.LogWarning("[MR] Episode: {Name}, ID: {Id}", episode.Name, episode.Id);
+            _logger.LogWarning("[MR] Season: {Season}, Episode: {Episode} (Season2Plus={IsSeason2Plus})", seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", isSeason2Plus);
+            _logger.LogWarning("[MR] Desired File Name: {Desired}", desiredFileName + fileExtension);
+            _logger.LogWarning("[MR] Dry Run: {DryRun}", dryRun);
+        }
+        else
+        {
+            _logger.LogInformation("[MR] === TryRenameEpisodeFile Called ===");
+            _logger.LogInformation("[MR] Episode: {Name}, ID: {Id}", episode.Name, episode.Id);
+            _logger.LogInformation("[MR] Season: {Season}, Episode: {Episode}", seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+            _logger.LogInformation("[MR] Desired File Name: {Desired}", desiredFileName + fileExtension);
+            _logger.LogInformation("[MR] Dry Run: {DryRun}", dryRun);
+        }
+        if (isSeason2Plus)
+        {
+            try
+            {
+                var logData = new { runId = "run1", hypothesisId = "MULTI-SEASON-RENAME-ENTRY", location = "PathRenameService.cs", message = "TryRenameEpisodeFile called for Season 2+ episode", data = new { episodeId = episode.Id.ToString(), episodeName = episode.Name ?? "NULL", seasonNumber = seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", episodeNumber = episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", desiredFileName = desiredFileName + fileExtension, dryRun = dryRun, currentPath = overridePath ?? episode.Path ?? "NULL" }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
+                DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(logData) + "\n");
+            }
+            catch (Exception logEx) { _logger.LogError(logEx, "[MR] [DEBUG] [MULTI-SEASON-RENAME-ENTRY] ERROR logging: {Error}", logEx.Message); }
+        }
+    }
+
+    private bool CheckEpisodeTargetConflict(Episode episode, string currentPath, string newFullPath, string desiredFileName, string fileExtension, bool isSeason2Plus, int? seasonNumber)
+    {
+        if (!File.Exists(newFullPath))
+            return false;
+        var targetFileInfo = new FileInfo(newFullPath);
+        var sourceFileInfo = new FileInfo(currentPath);
+        var isSameFile = string.Equals(currentPath, newFullPath, StringComparison.OrdinalIgnoreCase);
+        var targetFileSize = targetFileInfo.Exists ? targetFileInfo.Length : -1;
+        var sourceFileSize = sourceFileInfo.Exists ? sourceFileInfo.Length : -1;
+        var filesAreSame = isSameFile || (targetFileSize == sourceFileSize && targetFileSize > 0);
+        DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(new { runId = "run1", hypothesisId = "DUPLICATE-TARGET-FILENAME", location = "PathRenameService.cs", message = "Target file already exists - checking if same file", data = new { episodeId = episode.Id.ToString(), episodeName = episode.Name ?? "NULL", seasonNumber = seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", episodeNumber = episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", isSeason2Plus = isSeason2Plus, sourcePath = currentPath, targetPath = newFullPath, isSameFile = isSameFile, sourceFileSize = sourceFileSize, targetFileSize = targetFileSize, filesAreSame = filesAreSame, desiredFileName = desiredFileName + fileExtension }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
+        if (filesAreSame)
+        {
+            _logger.LogInformation("[MR] Target file already exists and is the same as source. File already renamed correctly. From: {From}, To: {To}", currentPath, newFullPath);
+            return true;
+        }
+        _logger.LogError("[MR] ERROR: Target file already exists with different content. This indicates duplicate episode metadata in Jellyfin (multiple episodes mapped to the same episode number/title). From: {From}, To: {To}, EpisodeId: {EpisodeId}, Season: {Season}, Episode: {Episode}", currentPath, newFullPath, episode.Id, seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+        _logger.LogError("[MR] Please fix the episode metadata in Jellyfin (correct episode numbers and titles) and try again.");
+        return true;
     }
 
     private void ExecuteEpisodeFileMove(Episode episode, string currentPath, string newFullPath, bool isSeason2Plus, int? seasonNumber)

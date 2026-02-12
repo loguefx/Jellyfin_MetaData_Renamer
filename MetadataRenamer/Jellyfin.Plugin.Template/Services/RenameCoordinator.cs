@@ -593,6 +593,194 @@ public class RenameCoordinator
         HandleMovieUpdate(movie, cfg, now);
     }
 
+    private (string? path, bool seriesRenameOnCooldown) ValidateSeriesPathAndCooldown(Series series, PluginConfiguration cfg, DateTime now)
+    {
+        bool seriesRenameOnCooldown = false;
+        if (_lastAttemptUtcByItem.TryGetValue(series.Id, out var lastTry))
+        {
+            var timeSinceLastTry = (now - lastTry).TotalSeconds;
+            if (timeSinceLastTry < cfg.PerItemCooldownSeconds)
+            {
+                _logger.LogInformation("[MR] SKIP: Cooldown active for series folder rename. SeriesId={Id}, Name={Name}, Time since last try: {Seconds} seconds (cooldown: {CooldownSeconds})", series.Id, series.Name, timeSinceLastTry.ToString(System.Globalization.CultureInfo.InvariantCulture), cfg.PerItemCooldownSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                _logger.LogInformation("[MR] [DEBUG] Cooldown active, but will still check if episodes need processing");
+                seriesRenameOnCooldown = true;
+            }
+        }
+        if (!seriesRenameOnCooldown)
+            _lastAttemptUtcByItem[series.Id] = now;
+
+        var path = series.Path;
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            _logger.LogWarning("[MR] SKIP: Series has no path. SeriesId={Id}, Name={Name}", series.Id, series.Name);
+            return (null, false);
+        }
+        if (!Directory.Exists(path))
+        {
+            _logger.LogWarning("[MR] SKIP: Series path does not exist on disk. Path={Path}, SeriesId={Id}, Name={Name}", path, series.Id, series.Name);
+            return (null, false);
+        }
+        return (path, seriesRenameOnCooldown);
+    }
+
+    private string LogSeriesProviderIdsAndValidate(Series series, PluginConfiguration cfg)
+    {
+        var providerIdsCount = series.ProviderIds?.Count ?? 0;
+        var providerIdsString = series.ProviderIds != null ? string.Join(", ", series.ProviderIds.Select(kv => $"{kv.Key}={kv.Value}")) : "NONE";
+        _logger.LogInformation("[MR] === Provider IDs Details ===");
+        _logger.LogInformation("[MR] Provider IDs Count: {Count}", providerIdsCount);
+        _logger.LogInformation("[MR] All Provider IDs: {Values}", providerIdsString);
+        if (series.ProviderIds != null && series.ProviderIds.Count > 0)
+        {
+            foreach (var kv in series.ProviderIds)
+                _logger.LogInformation("[MR]   - {Provider}: {Id}", kv.Key, kv.Value ?? "NULL");
+        }
+        else
+            _logger.LogWarning("[MR]   - No provider IDs found!");
+        if (cfg.RequireProviderIdMatch && (series.ProviderIds == null || series.ProviderIds.Count == 0))
+        {
+            _logger.LogWarning("[MR] SKIP: RequireProviderIdMatch is true but no ProviderIds found. Name={Name}", series.Name);
+            return null;
+        }
+        if (cfg.RequireProviderIdMatch)
+            _logger.LogInformation("[MR] Provider ID requirement satisfied");
+        return providerIdsString;
+    }
+
+    private (string name, int? year, string yearSource) GetSeriesYearAndName(Series series, string path, string providerIdsString)
+    {
+        var name = series.Name?.Trim();
+        int? year = series.ProductionYear;
+        string yearSource = "ProductionYear";
+        if (year is null && series.PremiereDate.HasValue)
+        {
+            year = series.PremiereDate.Value.Year;
+            yearSource = "PremiereDate";
+        }
+        DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "YEAR-DETECT", location = "RenameCoordinator.cs", message = "Year detection from metadata", data = new { seriesId = series.Id.ToString(), seriesName = name ?? "NULL", productionYear = series.ProductionYear?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", premiereDate = series.PremiereDate?.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", premiereDateYear = series.PremiereDate?.Year.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", finalYear = year?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", yearSource = yearSource, currentFolderPath = path, currentFolderName = Path.GetFileName(path) }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
+        _logger.LogInformation("[MR] === Year Detection from Metadata (BEFORE Correction) ===");
+        _logger.LogInformation("[MR] Series: {Name}, ID: {Id}", name ?? "NULL", series.Id);
+        _logger.LogInformation("[MR] ProductionYear (from Jellyfin): {ProductionYear}", series.ProductionYear?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+        _logger.LogInformation("[MR] PremiereDate (from Jellyfin): {PremiereDate}, Year: {PremiereDateYear}", series.PremiereDate?.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", series.PremiereDate?.Year.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+        _logger.LogInformation("[MR] Year from Metadata (BEFORE correction): {Year} (Source: {YearSource})", year?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", yearSource);
+        _logger.LogInformation("[MR] Current Folder Name: {CurrentFolderName}", Path.GetFileName(path));
+        _logger.LogInformation("[MR] Series metadata: Name={Name}, Year={Year} (from {YearSource}), ProviderIds={ProviderIds}", name ?? "NULL", year?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", yearSource, providerIdsString);
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            _logger.LogWarning("[MR] SKIP: Missing required metadata. Name={Name}", name ?? "NULL");
+            return (null, null, null);
+        }
+        return (name, year, yearSource);
+    }
+
+    private (string newHash, string? oldHash, bool providerIdsChanged, bool isFirstTime, bool hasProviderIds) RunSeriesProviderHashQueueAndBulk(Series series, string name, PluginConfiguration cfg, bool forceProcessing)
+    {
+        var hasProviderIds = series.ProviderIds != null && series.ProviderIds.Count > 0;
+        var newHash = hasProviderIds && series.ProviderIds != null ? ProviderIdHelper.ComputeProviderHash(series.ProviderIds) : string.Empty;
+        var hasOldHash = _providerHashByItem.TryGetValue(series.Id, out var oldHash);
+        var providerIdsChanged = hasOldHash && !string.Equals(newHash, oldHash, StringComparison.Ordinal);
+        var isFirstTime = !hasOldHash;
+
+        DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "B", location = "RenameCoordinator.cs", message = "Provider hash check", data = new { oldHash = oldHash ?? "(none)", newHash = newHash, hasOldHash = hasOldHash, hasProviderIds = hasProviderIds, seriesName = name, providerIds = series.ProviderIds != null ? string.Join(",", series.ProviderIds.Select(kv => $"{kv.Key}={kv.Value}")) : "null", processDuringLibraryScans = cfg.ProcessDuringLibraryScans, onlyRenameWhenProviderIdsChange = cfg.OnlyRenameWhenProviderIdsChange, providerIdsChanged = providerIdsChanged, isFirstTime = isFirstTime }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
+        _logger.LogInformation("[MR] === Provider Hash Check ===");
+        _logger.LogInformation("[MR] ProcessDuringLibraryScans: {ProcessDuringLibraryScans}", cfg.ProcessDuringLibraryScans);
+        _logger.LogInformation("[MR] OnlyRenameWhenProviderIdsChange: {OnlyRenameWhenProviderIdsChange}", cfg.OnlyRenameWhenProviderIdsChange);
+        _logger.LogInformation("[MR] Has Provider IDs: {HasProviderIds}", hasProviderIds);
+        _logger.LogInformation("[MR] Old Hash Exists: {HasOldHash}, Value: {OldHash}", hasOldHash, oldHash ?? "(none)");
+        _logger.LogInformation("[MR] New Hash: {NewHash}", newHash);
+        _logger.LogInformation("[MR] Provider IDs Changed: {Changed}, First Time: {FirstTime}", providerIdsChanged, isFirstTime);
+        _logger.LogInformation("[MR] Series: {Name}", name);
+        try
+        {
+            _logger.LogInformation("[MR] [DEBUG] [PROVIDER-HASH-CHECK] Provider hash check state: SeriesId={SeriesId}, SeriesName='{SeriesName}', OnlyRenameWhenProviderIdsChange={OnlyRenameWhenProviderIdsChange}, HasProviderIds={HasProviderIds}, HasOldHash={HasOldHash}, OldHash={OldHash}, NewHash={NewHash}, ProviderIdsChanged={ProviderIdsChanged}, IsFirstTime={IsFirstTime}, ForceProcessing={ForceProcessing}", series.Id, name ?? "NULL", cfg.OnlyRenameWhenProviderIdsChange, hasProviderIds, hasOldHash, oldHash ?? "(none)", newHash, providerIdsChanged, isFirstTime, forceProcessing);
+            DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(new { runId = "run1", hypothesisId = "PROVIDER-HASH-CHECK", location = "RenameCoordinator.cs", message = "Provider hash check state", data = new { seriesId = series.Id.ToString(), seriesName = name ?? "NULL", processDuringLibraryScans = cfg.ProcessDuringLibraryScans, onlyRenameWhenProviderIdsChange = cfg.OnlyRenameWhenProviderIdsChange, hasProviderIds = hasProviderIds, hasOldHash = hasOldHash, oldHash = oldHash ?? "(none)", newHash = newHash, providerIdsChanged = providerIdsChanged, isFirstTime = isFirstTime, forceProcessing = forceProcessing }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[MR] [DEBUG] [PROVIDER-HASH-CHECK] ERROR logging hash check: {Error}", ex.Message);
+            DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(new { runId = "run1", hypothesisId = "PROVIDER-HASH-CHECK", location = "RenameCoordinator.cs", message = "ERROR logging hash check", data = new { error = ex.Message }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
+        }
+
+        var currentTime = DateTime.UtcNow;
+        if (!providerIdsChanged && !isFirstTime)
+            _seriesUpdateTimestamps.Enqueue(currentTime);
+        else
+            _logger.LogInformation("[MR] [DEBUG] [SERIES-UPDATE-QUEUE-SKIP] Skipping queue addition - Provider IDs changed (Identify flow) or first time. ProviderIdsChanged={Changed}, IsFirstTime={FirstTime}", providerIdsChanged, isFirstTime);
+        try
+        {
+            _logger.LogInformation("[MR] [DEBUG] [SERIES-UPDATE-QUEUE] === Series Update Added to Queue ===");
+            _logger.LogInformation("[MR] [DEBUG] [SERIES-UPDATE-QUEUE] Series: {Name}, ID: {Id}", name ?? "NULL", series.Id);
+            _logger.LogInformation("[MR] [DEBUG] [SERIES-UPDATE-QUEUE] Timestamp: {Timestamp}", currentTime.ToString("yyyy-MM-dd HH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture));
+            _logger.LogInformation("[MR] [DEBUG] [SERIES-UPDATE-QUEUE] Queue size BEFORE adding: {Count}", _seriesUpdateTimestamps.Count - 1);
+            _logger.LogInformation("[MR] [DEBUG] [SERIES-UPDATE-QUEUE] Queue size AFTER adding: {Count}", _seriesUpdateTimestamps.Count);
+            _logger.LogInformation("[MR] [DEBUG] [SERIES-UPDATE-QUEUE] Provider IDs Changed: {Changed}", providerIdsChanged);
+            _logger.LogInformation("[MR] [DEBUG] [SERIES-UPDATE-QUEUE] Is First Time: {IsFirstTime}", isFirstTime);
+            DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(new { runId = "run1", hypothesisId = "SERIES-UPDATE-QUEUE", location = "RenameCoordinator.cs", message = "Series update added to queue", data = new { seriesId = series.Id.ToString(), seriesName = name ?? "NULL", timestamp = currentTime.ToString("yyyy-MM-dd HH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture), queueSizeBefore = providerIdsChanged || isFirstTime ? _seriesUpdateTimestamps.Count : _seriesUpdateTimestamps.Count - 1, queueSizeAfter = _seriesUpdateTimestamps.Count, providerIdsChanged = providerIdsChanged, isFirstTime = isFirstTime, hasProviderIds = hasProviderIds, addedToQueue = !providerIdsChanged && !isFirstTime }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
+        }
+        catch (Exception ex) { _logger.LogError(ex, "[MR] [DEBUG] [SERIES-UPDATE-QUEUE] ERROR logging queue addition: {Error}", ex.Message); }
+
+        var timestampsRemoved = 0;
+        while (_seriesUpdateTimestamps.Count > 0 && (currentTime - _seriesUpdateTimestamps.Peek()).TotalSeconds > BulkUpdateTimeWindowSeconds)
+        {
+            _seriesUpdateTimestamps.Dequeue();
+            timestampsRemoved++;
+        }
+        if (timestampsRemoved > 0)
+        {
+            try
+            {
+                _logger.LogInformation("[MR] [DEBUG] [SERIES-UPDATE-QUEUE-CLEAN] Removed {Count} old timestamps from queue", timestampsRemoved);
+                _logger.LogInformation("[MR] [DEBUG] [SERIES-UPDATE-QUEUE-CLEAN] Queue size after cleanup: {Count}", _seriesUpdateTimestamps.Count);
+                DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(new { runId = "run1", hypothesisId = "SERIES-UPDATE-QUEUE-CLEAN", location = "RenameCoordinator.cs", message = "Old timestamps removed from queue", data = new { seriesId = series.Id.ToString(), seriesName = name ?? "NULL", timestampsRemoved = timestampsRemoved, queueSizeAfterCleanup = _seriesUpdateTimestamps.Count }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
+            }
+            catch (Exception ex) { _logger.LogError(ex, "[MR] [DEBUG] [SERIES-UPDATE-QUEUE-CLEAN] ERROR logging cleanup: {Error}", ex.Message); }
+        }
+
+        var isBulkRefresh = _seriesUpdateTimestamps.Count >= BulkUpdateThreshold;
+        var timeSinceLastBulkProcessing = (currentTime - _lastBulkProcessingUtc).TotalMinutes;
+        var seriesIsIdentified = hasProviderIds;
+        var shouldTriggerBulkProcessing = isBulkRefresh && timeSinceLastBulkProcessing >= BulkProcessingCooldownMinutes && !providerIdsChanged && !isFirstTime && seriesIsIdentified;
+        try
+        {
+            _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] === Bulk Processing Detection ===");
+            _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] Series: {Name}, ID: {Id}", name ?? "NULL", series.Id);
+            _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] Series updates in queue: {Count}", _seriesUpdateTimestamps.Count);
+            _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] Bulk update threshold: {Threshold}", BulkUpdateThreshold);
+            _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] Time window: {Seconds} seconds", BulkUpdateTimeWindowSeconds);
+            _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] isBulkRefresh (count >= threshold): {IsBulkRefresh}", isBulkRefresh);
+            _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] Time since last bulk processing: {Minutes} minutes (cooldown: {CooldownMinutes} minutes)", timeSinceLastBulkProcessing, BulkProcessingCooldownMinutes);
+            _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] providerIdsChanged: {Changed}", providerIdsChanged);
+            _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] isFirstTime: {IsFirstTime}", isFirstTime);
+            _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] seriesIsIdentified: {IsIdentified}", seriesIsIdentified);
+            _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] shouldTriggerBulkProcessing: {ShouldTrigger}", shouldTriggerBulkProcessing);
+            DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(new { runId = "run1", hypothesisId = "BULK-PROCESSING-DETECTION", location = "RenameCoordinator.cs", message = "Bulk processing detection", data = new { seriesId = series.Id.ToString(), seriesName = name ?? "NULL", seriesUpdatesInQueue = _seriesUpdateTimestamps.Count, bulkUpdateThreshold = BulkUpdateThreshold, bulkUpdateTimeWindowSeconds = BulkUpdateTimeWindowSeconds, isBulkRefresh = isBulkRefresh, timeSinceLastBulkProcessing = timeSinceLastBulkProcessing, bulkProcessingCooldownMinutes = BulkProcessingCooldownMinutes, providerIdsChanged = providerIdsChanged, isFirstTime = isFirstTime, seriesIsIdentified = seriesIsIdentified, shouldTriggerBulkProcessing = shouldTriggerBulkProcessing }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
+        }
+        catch (Exception ex) { _logger.LogError(ex, "[MR] [DEBUG] [BULK-PROCESSING-DETECTION] ERROR logging bulk processing detection: {Error}", ex.Message); }
+
+        if (shouldTriggerBulkProcessing)
+        {
+            try
+            {
+                _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-TRIGGERED] ===== BULK PROCESSING TRIGGERED =====");
+                _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-TRIGGERED] Series that triggered it: {Name}, ID: {Id}", name ?? "NULL", series.Id);
+                _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-TRIGGERED] Queue size: {Count}", _seriesUpdateTimestamps.Count);
+                DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(new { runId = "run1", hypothesisId = "BULK-PROCESSING-TRIGGERED", location = "RenameCoordinator.cs", message = "Bulk processing triggered", data = new { triggeringSeriesId = series.Id.ToString(), triggeringSeriesName = name ?? "NULL", queueSize = _seriesUpdateTimestamps.Count, providerIdsChanged = providerIdsChanged, isFirstTime = isFirstTime, seriesIsIdentified = seriesIsIdentified, timeSinceLastBulkProcessing = timeSinceLastBulkProcessing }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
+            }
+            catch (Exception ex) { _logger.LogError(ex, "[MR] [DEBUG] [BULK-PROCESSING-TRIGGERED] ERROR logging trigger: {Error}", ex.Message); }
+            _logger.LogInformation("[MR] === Bulk Refresh Detected (Replace All Metadata) ===");
+            _logger.LogInformation("[MR] Detected {Count} series updates in {Seconds} seconds", _seriesUpdateTimestamps.Count, BulkUpdateTimeWindowSeconds);
+            _logger.LogInformation("[MR] Provider IDs unchanged - this indicates 'Replace all metadata' operation");
+            _logger.LogInformation("[MR] Triggering bulk processing of all series in library...");
+            _lastBulkProcessingUtc = currentTime;
+            _seriesUpdateTimestamps.Clear();
+            Task.Run(() => ProcessAllSeriesInLibrary(cfg, currentTime));
+        }
+        else if (isBulkRefresh && (providerIdsChanged || isFirstTime))
+            _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] Skipping bulk processing - Provider IDs changed (Identify flow detected)");
+
+        return (newHash, oldHash, providerIdsChanged, isFirstTime, hasProviderIds);
+    }
+
     private static (bool shouldProceed, string proceedReason) ComputeShouldProceedForSeries(PluginConfiguration cfg, bool forceProcessing, bool providerIdsChanged, bool isFirstTime)
     {
         if (!cfg.OnlyRenameWhenProviderIdsChange)
@@ -643,428 +831,47 @@ public class RenameCoordinator
     /// <param name="forceProcessing">If true, processes the series even if provider IDs haven't changed (for bulk refresh).</param>
     private void HandleSeriesUpdate(Series series, PluginConfiguration cfg, DateTime now, bool forceProcessing = false)
     {
-        // Defensive check: Ensure RenameSeriesFolders is enabled
         if (!cfg.RenameSeriesFolders)
         {
-            _logger.LogInformation("[MR] [DEBUG] [SERIES-UPDATE-SKIP] SKIP: RenameSeriesFolders is disabled in configuration. Series: {Name}, Id={Id}", 
-                series.Name ?? "NULL", series.Id);
+            _logger.LogInformation("[MR] [DEBUG] [SERIES-UPDATE-SKIP] SKIP: RenameSeriesFolders is disabled in configuration. Series: {Name}, Id={Id}", series.Name ?? "NULL", series.Id);
             return;
         }
-        
         _logger.LogInformation("[MR] Processing Series: Name={Name}, Id={Id}, Path={Path}", series.Name, series.Id, series.Path);
 
-        // Per-item cooldown for series folder renaming
-        // NOTE: We check cooldown here but may still process episodes even if series folder rename is skipped
-        bool seriesRenameOnCooldown = false;
-        if (_lastAttemptUtcByItem.TryGetValue(series.Id, out var lastTry))
-        {
-                var timeSinceLastTry = (now - lastTry).TotalSeconds;
-                if (timeSinceLastTry < cfg.PerItemCooldownSeconds)
-            {
-                    _logger.LogInformation(
-                        "[MR] SKIP: Cooldown active for series folder rename. SeriesId={Id}, Name={Name}, Time since last try: {Seconds} seconds (cooldown: {CooldownSeconds})",
-                        series.Id, series.Name, timeSinceLastTry.ToString(System.Globalization.CultureInfo.InvariantCulture), cfg.PerItemCooldownSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
-                    _logger.LogInformation("[MR] [DEBUG] Cooldown active, but will still check if episodes need processing");
-                seriesRenameOnCooldown = true;
-                // Don't return here - continue to process episodes even if series folder rename is on cooldown
-            }
-        }
+        var (path, seriesRenameOnCooldown) = ValidateSeriesPathAndCooldown(series, cfg, now);
+        if (path == null)
+            return;
 
-        // Only update cooldown timestamp if we're not on cooldown (to avoid resetting the timer)
-        if (!seriesRenameOnCooldown)
-        {
-        _lastAttemptUtcByItem[series.Id] = now;
-        }
+        _logger.LogInformation("[MR] Series path verified: {Path}", path);
+        var providerIdsString = LogSeriesProviderIdsAndValidate(series, cfg);
+        if (providerIdsString == null)
+            return;
 
-        var path = series.Path;
-        if (string.IsNullOrWhiteSpace(path))
+        var (name, year, yearSource) = GetSeriesYearAndName(series, path, providerIdsString);
+        if (name == null)
+            return;
+
+        var (newHash, oldHash, providerIdsChanged, isFirstTime, hasProviderIds) = RunSeriesProviderHashQueueAndBulk(series, name, cfg, forceProcessing);
+        var seriesIsIdentified = hasProviderIds;
+
+        var (shouldProceed, proceedReason) = ComputeShouldProceedForSeries(cfg, forceProcessing, providerIdsChanged, isFirstTime);
+        LogSeriesShouldProceedDecision(series, name, shouldProceed, proceedReason, cfg, forceProcessing, providerIdsChanged, isFirstTime);
+        if (!shouldProceed)
         {
-                _logger.LogWarning("[MR] SKIP: Series has no path. SeriesId={Id}, Name={Name}", series.Id, series.Name);
+            LogSeriesSkipAndReturn(series, name, newHash, proceedReason, cfg, providerIdsChanged, isFirstTime, forceProcessing);
             return;
         }
 
-        if (!Directory.Exists(path))
-        {
-                _logger.LogWarning("[MR] SKIP: Series path does not exist on disk. Path={Path}, SeriesId={Id}, Name={Name}", path, series.Id, series.Name);
-            return;
-        }
+        ApplySeriesRenameAndEpisodeProcessing(series, cfg, path, name, ref year, yearSource, newHash, oldHash, hasProviderIds, providerIdsChanged, isFirstTime, seriesRenameOnCooldown, seriesIsIdentified, proceedReason, now);
+    }
 
-            _logger.LogInformation("[MR] Series path verified: {Path}", path);
+    private void ApplySeriesRenameAndEpisodeProcessing(Series series, PluginConfiguration cfg, string path, string name, ref int? year, string yearSource, string newHash, string? oldHash, bool hasProviderIds, bool providerIdsChanged, bool isFirstTime, bool seriesRenameOnCooldown, bool seriesIsIdentified, string proceedReason, DateTime now)
+    {
+        // Handle provider IDs - use if available, otherwise use empty values
+        string providerLabel = string.Empty;
+        string providerId = string.Empty;
 
-            // Check provider IDs - log ALL provider IDs in detail for debugging
-            var providerIdsCount = series.ProviderIds?.Count ?? 0;
-            var providerIdsString = series.ProviderIds != null 
-                ? string.Join(", ", series.ProviderIds.Select(kv => $"{kv.Key}={kv.Value}")) 
-                : "NONE";
-            
-            _logger.LogInformation("[MR] === Provider IDs Details ===");
-            _logger.LogInformation("[MR] Provider IDs Count: {Count}", providerIdsCount);
-            _logger.LogInformation("[MR] All Provider IDs: {Values}", providerIdsString);
-            
-            // Log each provider ID individually for clarity
-            if (series.ProviderIds != null && series.ProviderIds.Count > 0)
-            {
-                foreach (var kv in series.ProviderIds)
-                {
-                    _logger.LogInformation("[MR]   - {Provider}: {Id}", kv.Key, kv.Value ?? "NULL");
-                }
-            }
-            else
-            {
-                _logger.LogWarning("[MR]   - No provider IDs found!");
-            }
-
-        // Must be matched
-        if (cfg.RequireProviderIdMatch)
-        {
-            if (series.ProviderIds == null || series.ProviderIds.Count == 0)
-            {
-                    _logger.LogWarning("[MR] SKIP: RequireProviderIdMatch is true but no ProviderIds found. Name={Name}", series.Name);
-                    return;
-                }
-                _logger.LogInformation("[MR] Provider ID requirement satisfied");
-            }
-
-            var name = series.Name?.Trim();
-            
-            // Try ProductionYear first, then PremiereDate as fallback
-            int? year = series.ProductionYear;
-            string yearSource = "ProductionYear";
-            
-            if (year is null && series.PremiereDate.HasValue)
-            {
-                year = series.PremiereDate.Value.Year;
-                yearSource = "PremiereDate";
-            }
-
-            // #region agent log - Year detection
-            DebugLogHelper.SafeAppend( System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "YEAR-DETECT", location = "RenameCoordinator.cs:297", message = "Year detection from metadata", data = new { seriesId = series.Id.ToString(), seriesName = name ?? "NULL", productionYear = series.ProductionYear?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", premiereDate = series.PremiereDate?.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", premiereDateYear = series.PremiereDate?.Year.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", finalYear = year?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", yearSource = yearSource, currentFolderPath = path, currentFolderName = Path.GetFileName(path) }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
-            // #endregion
-
-            _logger.LogInformation("[MR] === Year Detection from Metadata (BEFORE Correction) ===");
-            _logger.LogInformation("[MR] Series: {Name}, ID: {Id}", name ?? "NULL", series.Id);
-            _logger.LogInformation("[MR] ProductionYear (from Jellyfin): {ProductionYear}", 
-                series.ProductionYear?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
-            _logger.LogInformation("[MR] PremiereDate (from Jellyfin): {PremiereDate}, Year: {PremiereDateYear}", 
-                series.PremiereDate?.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
-                series.PremiereDate?.Year.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
-            _logger.LogInformation("[MR] Year from Metadata (BEFORE correction): {Year} (Source: {YearSource})", 
-                year?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
-                yearSource);
-            _logger.LogInformation("[MR] Current Folder Name: {CurrentFolderName}", Path.GetFileName(path));
-            _logger.LogInformation("[MR] Series metadata: Name={Name}, Year={Year} (from {YearSource}), ProviderIds={ProviderIds}",
-                name ?? "NULL", 
-                year?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", 
-                yearSource,
-                providerIdsString);
-
-            if (string.IsNullOrWhiteSpace(name))
-            {
-                _logger.LogWarning("[MR] SKIP: Missing required metadata. Name={Name}", name ?? "NULL");
-                return;
-            }
-            
-            // Year is now optional - we'll handle it in the format rendering
-
-            // Check if we should process during library scans
-            // NEW LOGIC:
-            // - Normal scans: Only process when provider IDs change (Identify flow)
-            // - "Replace all metadata": Triggered via bulk processing (handled above)
-            // - The "Identify" flow (provider IDs change) always works
-            var hasProviderIds = series.ProviderIds != null && series.ProviderIds.Count > 0;
-            var newHash = hasProviderIds && series.ProviderIds != null
-                ? ProviderIdHelper.ComputeProviderHash(series.ProviderIds)
-                : string.Empty;
-            
-            var hasOldHash = _providerHashByItem.TryGetValue(series.Id, out var oldHash);
-            var providerIdsChanged = hasOldHash && !string.Equals(newHash, oldHash, StringComparison.Ordinal);
-            var isFirstTime = !hasOldHash;
-
-            // #region agent log
-            DebugLogHelper.SafeAppend( System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "B", location = "RenameCoordinator.cs:124", message = "Provider hash check", data = new { oldHash = oldHash ?? "(none)", newHash = newHash, hasOldHash = hasOldHash, hasProviderIds = hasProviderIds, seriesName = name, providerIds = series.ProviderIds != null ? string.Join(",", series.ProviderIds.Select(kv => $"{kv.Key}={kv.Value}")) : "null", processDuringLibraryScans = cfg.ProcessDuringLibraryScans, onlyRenameWhenProviderIdsChange = cfg.OnlyRenameWhenProviderIdsChange, providerIdsChanged = providerIdsChanged, isFirstTime = isFirstTime }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
-            // #endregion
-
-            _logger.LogInformation("[MR] === Provider Hash Check ===");
-            _logger.LogInformation("[MR] ProcessDuringLibraryScans: {ProcessDuringLibraryScans}", cfg.ProcessDuringLibraryScans);
-            _logger.LogInformation("[MR] OnlyRenameWhenProviderIdsChange: {OnlyRenameWhenProviderIdsChange}", cfg.OnlyRenameWhenProviderIdsChange);
-            _logger.LogInformation("[MR] Has Provider IDs: {HasProviderIds}", hasProviderIds);
-            _logger.LogInformation("[MR] Old Hash Exists: {HasOldHash}, Value: {OldHash}", hasOldHash, oldHash ?? "(none)");
-            _logger.LogInformation("[MR] New Hash: {NewHash}", newHash);
-            _logger.LogInformation("[MR] Provider IDs Changed: {Changed}, First Time: {FirstTime}", providerIdsChanged, isFirstTime);
-            _logger.LogInformation("[MR] Series: {Name}", name);
-            
-            // #region agent log - PROVIDER-HASH-CHECK: Track provider hash state
-            try
-            {
-                _logger.LogInformation("[MR] [DEBUG] [PROVIDER-HASH-CHECK] Provider hash check state: SeriesId={SeriesId}, SeriesName='{SeriesName}', OnlyRenameWhenProviderIdsChange={OnlyRenameWhenProviderIdsChange}, HasProviderIds={HasProviderIds}, HasOldHash={HasOldHash}, OldHash={OldHash}, NewHash={NewHash}, ProviderIdsChanged={ProviderIdsChanged}, IsFirstTime={IsFirstTime}, ForceProcessing={ForceProcessing}",
-                    series.Id, name ?? "NULL", cfg.OnlyRenameWhenProviderIdsChange, hasProviderIds, hasOldHash, oldHash ?? "(none)", newHash, providerIdsChanged, isFirstTime, forceProcessing);
-                
-                var logData = new { 
-                    runId = "run1", 
-                    hypothesisId = "PROVIDER-HASH-CHECK", 
-                    location = "RenameCoordinator.cs:777", 
-                    message = "Provider hash check state", 
-                    data = new { 
-                        seriesId = series.Id.ToString(),
-                        seriesName = name ?? "NULL",
-                        processDuringLibraryScans = cfg.ProcessDuringLibraryScans,
-                        onlyRenameWhenProviderIdsChange = cfg.OnlyRenameWhenProviderIdsChange,
-                        hasProviderIds = hasProviderIds,
-                        hasOldHash = hasOldHash,
-                        oldHash = oldHash ?? "(none)",
-                        newHash = newHash,
-                        providerIdsChanged = providerIdsChanged,
-                        isFirstTime = isFirstTime,
-                        forceProcessing = forceProcessing
-                    }, 
-                    timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() 
-                };
-                var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                DebugLogHelper.SafeAppend( logJson);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "[MR] [DEBUG] [PROVIDER-HASH-CHECK] ERROR logging hash check: {Error}", ex.Message);
-                DebugLogHelper.SafeAppend( System.Text.Json.JsonSerializer.Serialize(new { runId = "run1", hypothesisId = "PROVIDER-HASH-CHECK", location = "RenameCoordinator.cs:777", message = "ERROR logging hash check", data = new { error = ex.Message }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
-            }
-            // #endregion
-
-            // Track series update for bulk processing detection
-            // IMPORTANT: Only add to queue if provider IDs have NOT changed
-            // If provider IDs changed (Identify flow), don't count this towards bulk processing detection
-            var currentTime = DateTime.UtcNow;
-            
-            // Only add to queue if this is NOT an "Identify" operation (provider IDs unchanged)
-            // This prevents "Identify" from triggering bulk processing
-            if (!providerIdsChanged && !isFirstTime)
-            {
-                _seriesUpdateTimestamps.Enqueue(currentTime);
-            }
-            else
-            {
-                _logger.LogInformation("[MR] [DEBUG] [SERIES-UPDATE-QUEUE-SKIP] Skipping queue addition - Provider IDs changed (Identify flow) or first time. ProviderIdsChanged={Changed}, IsFirstTime={FirstTime}",
-                    providerIdsChanged, isFirstTime);
-            }
-
-            // #region agent log - SERIES-UPDATE-QUEUE: Track each series update added to queue
-            try
-            {
-                _logger.LogInformation("[MR] [DEBUG] [SERIES-UPDATE-QUEUE] === Series Update Added to Queue ===");
-                _logger.LogInformation("[MR] [DEBUG] [SERIES-UPDATE-QUEUE] Series: {Name}, ID: {Id}", name ?? "NULL", series.Id);
-                _logger.LogInformation("[MR] [DEBUG] [SERIES-UPDATE-QUEUE] Timestamp: {Timestamp}", currentTime.ToString("yyyy-MM-dd HH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture));
-                _logger.LogInformation("[MR] [DEBUG] [SERIES-UPDATE-QUEUE] Queue size BEFORE adding: {Count}", _seriesUpdateTimestamps.Count - 1);
-                _logger.LogInformation("[MR] [DEBUG] [SERIES-UPDATE-QUEUE] Queue size AFTER adding: {Count}", _seriesUpdateTimestamps.Count);
-                _logger.LogInformation("[MR] [DEBUG] [SERIES-UPDATE-QUEUE] Provider IDs Changed: {Changed}", providerIdsChanged);
-                _logger.LogInformation("[MR] [DEBUG] [SERIES-UPDATE-QUEUE] Is First Time: {IsFirstTime}", isFirstTime);
-                
-                var logData = new {
-                    runId = "run1",
-                    hypothesisId = "SERIES-UPDATE-QUEUE",
-                    location = "RenameCoordinator.cs:798",
-                    message = "Series update added to queue",
-                    data = new {
-                        seriesId = series.Id.ToString(),
-                        seriesName = name ?? "NULL",
-                        timestamp = currentTime.ToString("yyyy-MM-dd HH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture),
-                        queueSizeBefore = providerIdsChanged || isFirstTime ? _seriesUpdateTimestamps.Count : _seriesUpdateTimestamps.Count - 1,
-                        queueSizeAfter = _seriesUpdateTimestamps.Count,
-                        providerIdsChanged = providerIdsChanged,
-                        isFirstTime = isFirstTime,
-                        hasProviderIds = hasProviderIds,
-                        addedToQueue = !providerIdsChanged && !isFirstTime
-                    },
-                    timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-                };
-                var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                DebugLogHelper.SafeAppend( logJson);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "[MR] [DEBUG] [SERIES-UPDATE-QUEUE] ERROR logging queue addition: {Error}", ex.Message);
-            }
-            // #endregion
-
-            // Clean old timestamps outside the time window
-            var timestampsRemoved = 0;
-            while (_seriesUpdateTimestamps.Count > 0 && (currentTime - _seriesUpdateTimestamps.Peek()).TotalSeconds > BulkUpdateTimeWindowSeconds)
-            {
-                var removedTimestamp = _seriesUpdateTimestamps.Dequeue();
-                timestampsRemoved++;
-            }
-            
-            // #region agent log - SERIES-UPDATE-QUEUE-CLEAN: Track timestamp cleanup
-            if (timestampsRemoved > 0)
-            {
-                try
-                {
-                    _logger.LogInformation("[MR] [DEBUG] [SERIES-UPDATE-QUEUE-CLEAN] Removed {Count} old timestamps from queue", timestampsRemoved);
-                    _logger.LogInformation("[MR] [DEBUG] [SERIES-UPDATE-QUEUE-CLEAN] Queue size after cleanup: {Count}", _seriesUpdateTimestamps.Count);
-                    
-                    var logData = new {
-                        runId = "run1",
-                        hypothesisId = "SERIES-UPDATE-QUEUE-CLEAN",
-                        location = "RenameCoordinator.cs:804",
-                        message = "Old timestamps removed from queue",
-                        data = new {
-                            seriesId = series.Id.ToString(),
-                            seriesName = name ?? "NULL",
-                            timestampsRemoved = timestampsRemoved,
-                            queueSizeAfterCleanup = _seriesUpdateTimestamps.Count
-                        },
-                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-                    };
-                    var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                    DebugLogHelper.SafeAppend( logJson);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "[MR] [DEBUG] [SERIES-UPDATE-QUEUE-CLEAN] ERROR logging cleanup: {Error}", ex.Message);
-                }
-            }
-            // #endregion
-
-            // Check if this looks like "Replace all metadata" (bulk refresh)
-            // IMPORTANT: Only trigger bulk processing if:
-            // 1. Provider IDs have NOT changed (indicates "Replace all metadata", not "Identify")
-            // 2. Series has provider IDs (is identified) - don't process unidentified shows
-            // 3. Enough series updates in the time window
-            // "Replace all metadata" updates metadata but doesn't change provider IDs
-            // "Identify" changes provider IDs, so we should NOT trigger bulk processing for it
-            var isBulkRefresh = _seriesUpdateTimestamps.Count >= BulkUpdateThreshold;
-            var timeSinceLastBulkProcessing = (currentTime - _lastBulkProcessingUtc).TotalMinutes;
-            var seriesIsIdentified = hasProviderIds; // Series has provider IDs (is identified)
-            var shouldTriggerBulkProcessing = isBulkRefresh &&
-                                             timeSinceLastBulkProcessing >= BulkProcessingCooldownMinutes &&
-                                             !providerIdsChanged &&
-                                             !isFirstTime &&
-                                             seriesIsIdentified; // Only trigger for identified series (don't process everything during normal scans)
-
-            // #region agent log - BULK-PROCESSING-DETECTION: Track bulk processing detection logic
-            try
-            {
-                _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] === Bulk Processing Detection ===");
-                _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] Series: {Name}, ID: {Id}", name ?? "NULL", series.Id);
-                _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] Series updates in queue: {Count}", _seriesUpdateTimestamps.Count);
-                _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] Bulk update threshold: {Threshold}", BulkUpdateThreshold);
-                _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] Time window: {Seconds} seconds", BulkUpdateTimeWindowSeconds);
-                _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] isBulkRefresh (count >= threshold): {IsBulkRefresh}", isBulkRefresh);
-                _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] Time since last bulk processing: {Minutes} minutes (cooldown: {CooldownMinutes} minutes)",
-                    timeSinceLastBulkProcessing, BulkProcessingCooldownMinutes);
-                _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] providerIdsChanged: {Changed}", providerIdsChanged);
-                _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] isFirstTime: {IsFirstTime}", isFirstTime);
-                _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] seriesIsIdentified: {IsIdentified}", seriesIsIdentified);
-                _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] shouldTriggerBulkProcessing: {ShouldTrigger}", shouldTriggerBulkProcessing);
-                _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] Reason: {Reason}",
-                    shouldTriggerBulkProcessing
-                        ? "Bulk refresh detected (Replace all metadata)"
-                        : (isBulkRefresh
-                            ? (providerIdsChanged || isFirstTime
-                                ? "Provider IDs changed (Identify flow) - skipping bulk processing"
-                                : (!seriesIsIdentified
-                                    ? "Series not identified - skipping bulk processing (normal scan, not bulk refresh)"
-                                    : (timeSinceLastBulkProcessing < BulkProcessingCooldownMinutes
-                                        ? "Bulk processing on cooldown"
-                                        : "Unknown reason")))
-                            : "Not enough series updates to trigger bulk processing"));
-
-                var logData = new {
-                    runId = "run1",
-                    hypothesisId = "BULK-PROCESSING-DETECTION",
-                    location = "RenameCoordinator.cs:790",
-                    message = "Bulk processing detection",
-                    data = new {
-                        seriesId = series.Id.ToString(),
-                        seriesName = name ?? "NULL",
-                        seriesUpdatesInQueue = _seriesUpdateTimestamps.Count,
-                        bulkUpdateThreshold = BulkUpdateThreshold,
-                        bulkUpdateTimeWindowSeconds = BulkUpdateTimeWindowSeconds,
-                        isBulkRefresh = isBulkRefresh,
-                        timeSinceLastBulkProcessing = timeSinceLastBulkProcessing,
-                        bulkProcessingCooldownMinutes = BulkProcessingCooldownMinutes,
-                        providerIdsChanged = providerIdsChanged,
-                        isFirstTime = isFirstTime,
-                        seriesIsIdentified = seriesIsIdentified,
-                        shouldTriggerBulkProcessing = shouldTriggerBulkProcessing
-                    },
-                    timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-                };
-                var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                DebugLogHelper.SafeAppend( logJson);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "[MR] [DEBUG] [BULK-PROCESSING-DETECTION] ERROR logging bulk processing detection: {Error}", ex.Message);
-            }
-            // #endregion
-
-            if (shouldTriggerBulkProcessing)
-            {
-                // #region agent log - BULK-PROCESSING-TRIGGERED: Track when bulk processing is actually triggered
-                try
-                {
-                    _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-TRIGGERED] ===== BULK PROCESSING TRIGGERED =====");
-                    _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-TRIGGERED] Series that triggered it: {Name}, ID: {Id}", name ?? "NULL", series.Id);
-                    _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-TRIGGERED] Queue size: {Count}", _seriesUpdateTimestamps.Count);
-                    _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-TRIGGERED] Provider IDs Changed: {Changed}", providerIdsChanged);
-                    _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-TRIGGERED] Is First Time: {IsFirstTime}", isFirstTime);
-                    _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-TRIGGERED] Series Is Identified: {IsIdentified}", seriesIsIdentified);
-                    _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-TRIGGERED] Time Since Last Bulk: {Minutes} minutes", timeSinceLastBulkProcessing);
-                    
-                    var logData = new {
-                        runId = "run1",
-                        hypothesisId = "BULK-PROCESSING-TRIGGERED",
-                        location = "RenameCoordinator.cs:880",
-                        message = "Bulk processing triggered - ProcessAllSeriesInLibrary will be called",
-                        data = new {
-                            triggeringSeriesId = series.Id.ToString(),
-                            triggeringSeriesName = name ?? "NULL",
-                            queueSize = _seriesUpdateTimestamps.Count,
-                            providerIdsChanged = providerIdsChanged,
-                            isFirstTime = isFirstTime,
-                            seriesIsIdentified = seriesIsIdentified,
-                            timeSinceLastBulkProcessing = timeSinceLastBulkProcessing
-                        },
-                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-                    };
-                    var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                    DebugLogHelper.SafeAppend( logJson);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "[MR] [DEBUG] [BULK-PROCESSING-TRIGGERED] ERROR logging trigger: {Error}", ex.Message);
-                }
-                // #endregion
-                
-                _logger.LogInformation("[MR] === Bulk Refresh Detected (Replace All Metadata) ===");
-                _logger.LogInformation("[MR] Detected {Count} series updates in {Seconds} seconds",
-                    _seriesUpdateTimestamps.Count, BulkUpdateTimeWindowSeconds);
-                _logger.LogInformation("[MR] Provider IDs unchanged - this indicates 'Replace all metadata' operation");
-                _logger.LogInformation("[MR] Triggering bulk processing of all series in library...");
-
-                _lastBulkProcessingUtc = currentTime;
-                _seriesUpdateTimestamps.Clear(); // Clear after triggering to avoid duplicate triggers
-
-                // Process all series in the library asynchronously (don't block current processing)
-                Task.Run(() => ProcessAllSeriesInLibrary(cfg, currentTime));
-            }
-            else if (isBulkRefresh && (providerIdsChanged || isFirstTime))
-            {
-                _logger.LogInformation("[MR] [DEBUG] [BULK-PROCESSING-DETECTION] Skipping bulk processing - Provider IDs changed (Identify flow detected)");
-            }
-
-            var (shouldProceed, proceedReason) = ComputeShouldProceedForSeries(cfg, forceProcessing, providerIdsChanged, isFirstTime);
-            LogSeriesShouldProceedDecision(series, name, shouldProceed, proceedReason, cfg, forceProcessing, providerIdsChanged, isFirstTime);
-            if (!shouldProceed)
-            {
-                LogSeriesSkipAndReturn(series, name, newHash, proceedReason, cfg, providerIdsChanged, isFirstTime, forceProcessing);
-                return;
-            }
-
-            // Handle provider IDs - use if available, otherwise use empty values
-            string providerLabel = string.Empty;
-            string providerId = string.Empty;
-
-            // SMART DETECTION: Before storing new provider IDs, check what changed
+        // SMART DETECTION: Before storing new provider IDs, check what changed
             // This allows us to detect which provider the user selected in "Identify"
             Dictionary<string, string>? previousProviderIds = null;
             if (hasProviderIds && series.ProviderIds != null)
@@ -1504,6 +1311,80 @@ public class RenameCoordinator
             _logger.LogInformation("[MR] ===== Processing Complete =====");
     }
 
+    private bool ProcessAllEpisodesFromSeriesGuard(Series series, PluginConfiguration cfg)
+    {
+        if (!cfg.RenameEpisodeFiles)
+        {
+            _logger.LogInformation("[MR] [DEBUG] [PROCESS-ALL-EPISODES-SKIP] SKIP: RenameEpisodeFiles is disabled in configuration. Series: {Name}, ID: {Id}", series.Name ?? "NULL", series.Id);
+            return false;
+        }
+        _folderSeasonEpisodeMapCache.Clear();
+        try
+        {
+            _logger.LogInformation("[MR] [DEBUG] [PROCESS-ALL-EPISODES-ENTRY] ===== ProcessAllEpisodesFromSeries ENTRY =====");
+            _logger.LogInformation("[MR] [DEBUG] [PROCESS-ALL-EPISODES-ENTRY] Series: {Name}, ID: {Id}, Path: {Path}", series.Name ?? "NULL", series.Id, series.Path ?? "NULL");
+            _logger.LogInformation("[MR] [DEBUG] [PROCESS-ALL-EPISODES-ENTRY] RenameEpisodeFiles: {RenameEpisodeFiles}, DryRun: {DryRun}", cfg.RenameEpisodeFiles, cfg.DryRun);
+            DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(new { runId = "run1", hypothesisId = "PROCESS-ALL-EPISODES-ENTRY", location = "RenameCoordinator.cs", message = "ProcessAllEpisodesFromSeries entry", data = new { seriesId = series.Id.ToString(), seriesName = series.Name ?? "NULL", seriesPath = series.Path ?? "NULL", renameEpisodeFiles = cfg.RenameEpisodeFiles, dryRun = cfg.DryRun, libraryManagerAvailable = _libraryManager != null }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[MR] [DEBUG] [PROCESS-ALL-EPISODES-ENTRY] ERROR logging entry: {Error}", ex.Message);
+        }
+        if (_libraryManager == null)
+        {
+            _logger.LogWarning("[MR] [DEBUG] [PROCESS-ALL-EPISODES-ENTRY] LibraryManager is not available. Cannot process all episodes from series.");
+            return false;
+        }
+        return true;
+    }
+
+    private bool TryLoadEpisodesAndSeasonsForSeries(Series series, out List<Episode> allEpisodes, out List<Season> allSeasons)
+    {
+        allEpisodes = new List<Episode>();
+        allSeasons = new List<Season>();
+        try
+        {
+            var query = new InternalItemsQuery { ParentId = series.Id, Recursive = true };
+            _logger.LogInformation("[MR] === Executing Episode Query ===");
+            _logger.LogInformation("[MR] Query: ParentId={ParentId}, Recursive={Recursive}", series.Id, true);
+            try
+            {
+                DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(new { runId = "run1", hypothesisId = "EPISODE-QUERY-EXECUTION", location = "RenameCoordinator.cs", message = "Executing episode query", data = new { seriesId = series.Id.ToString(), seriesName = series.Name ?? "NULL", seriesPath = series.Path ?? "NULL", queryParentId = series.Id.ToString(), queryRecursive = true, libraryManagerAvailable = _libraryManager != null }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
+            }
+            catch (Exception logEx) { _logger.LogError(logEx, "[MR] [DEBUG] [EPISODE-QUERY-EXECUTION] ERROR logging: {Error}", logEx.Message); }
+            var allItems = _libraryManager.GetItemList(query);
+            allEpisodes = allItems.OfType<Episode>().ToList();
+            allSeasons = allItems.OfType<Season>().ToList();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            try
+            {
+                _logger.LogError(ex, "[MR] [DEBUG] [EPISODE-QUERY-ERROR] ERROR retrieving episodes using GetItemList");
+                DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(new { runId = "run1", hypothesisId = "EPISODE-QUERY-ERROR", location = "RenameCoordinator.cs", message = "Error retrieving episodes - attempting fallback", data = new { seriesId = series.Id.ToString(), seriesName = series.Name ?? "NULL", exceptionType = ex.GetType().FullName, exceptionMessage = ex.Message }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
+            }
+            catch (Exception logEx) { _logger.LogError(logEx, "[MR] [DEBUG] [EPISODE-QUERY-ERROR] ERROR logging: {Error}", logEx.Message); }
+            _logger.LogWarning(ex, "[MR] Could not retrieve episodes using GetItemList. Trying alternative method: {Message}", ex.Message);
+            try
+            {
+                _logger.LogInformation("[MR] [DEBUG] Attempting fallback method to retrieve episodes");
+                var query = new InternalItemsQuery { ParentId = series.Id, Recursive = true };
+                var allItems = _libraryManager.GetItemList(query);
+                allEpisodes = allItems.OfType<Episode>().ToList();
+                allSeasons = allItems.OfType<Season>().ToList();
+                _logger.LogInformation("[MR] Retrieved {Count} episodes using fallback recursive method", allEpisodes.Count);
+                return true;
+            }
+            catch (Exception fallbackEx)
+            {
+                _logger.LogError(fallbackEx, "[MR] Could not retrieve episodes using fallback method: {Message}", fallbackEx.Message);
+                _logger.LogError("[MR] [DEBUG] Cannot proceed with episode processing - both query methods failed");
+                return false;
+            }
+        }
+    }
+
     /// <summary>
     /// Processes all episodes from all seasons of a series.
     /// This ensures that when a series is identified, ALL episodes from ALL seasons are processed,
@@ -1516,159 +1397,64 @@ public class RenameCoordinator
     {
         try
         {
-            // Defensive check: Ensure RenameEpisodeFiles is enabled
-            if (!cfg.RenameEpisodeFiles)
-            {
-                _logger.LogInformation("[MR] [DEBUG] [PROCESS-ALL-EPISODES-SKIP] SKIP: RenameEpisodeFiles is disabled in configuration. Series: {Name}, ID: {Id}", 
-                    series.Name ?? "NULL", series.Id);
+            if (!ProcessAllEpisodesFromSeriesGuard(series, cfg))
                 return;
-            }
-
-            // Clear per-folder (season, episode) cache so position-based assignment is stable and we don't create duplicate S01E01 etc.
-            _folderSeasonEpisodeMapCache.Clear();
-
-            // #region agent log - PROCESS-ALL-EPISODES-ENTRY: Track ProcessAllEpisodesFromSeries entry
-            try
-            {
-                _logger.LogInformation("[MR] [DEBUG] [PROCESS-ALL-EPISODES-ENTRY] ===== ProcessAllEpisodesFromSeries ENTRY =====");
-                _logger.LogInformation("[MR] [DEBUG] [PROCESS-ALL-EPISODES-ENTRY] Series: {Name}, ID: {Id}, Path: {Path}", 
-                    series.Name ?? "NULL", series.Id, series.Path ?? "NULL");
-                _logger.LogInformation("[MR] [DEBUG] [PROCESS-ALL-EPISODES-ENTRY] RenameEpisodeFiles: {RenameEpisodeFiles}, DryRun: {DryRun}", 
-                    cfg.RenameEpisodeFiles, cfg.DryRun);
-                
-                var logData = new { 
-                    runId = "run1", 
-                    hypothesisId = "PROCESS-ALL-EPISODES-ENTRY", 
-                    location = "RenameCoordinator.cs:1305", 
-                    message = "ProcessAllEpisodesFromSeries entry", 
-                    data = new { 
-                        seriesId = series.Id.ToString(),
-                        seriesName = series.Name ?? "NULL",
-                        seriesPath = series.Path ?? "NULL",
-                        renameEpisodeFiles = cfg.RenameEpisodeFiles,
-                        dryRun = cfg.DryRun,
-                        libraryManagerAvailable = _libraryManager != null
-                    }, 
-                    timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() 
-                };
-                var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                DebugLogHelper.SafeAppend( logJson);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "[MR] [DEBUG] [PROCESS-ALL-EPISODES-ENTRY] ERROR logging entry: {Error}", ex.Message);
-            }
-            // #endregion
-            
-            if (_libraryManager == null)
-            {
-                _logger.LogWarning("[MR] [DEBUG] [PROCESS-ALL-EPISODES-ENTRY] LibraryManager is not available. Cannot process all episodes from series. Episodes will be processed individually as ItemUpdated events are received.");
-                return;
-            }
 
             _logger.LogInformation("[MR] === Processing All Episodes from All Seasons ===");
             _logger.LogInformation("[MR] Series: {Name}, ID: {Id}", series.Name, series.Id);
 
-            // Get all episodes from the series using ILibraryManager
-            // Try to get episodes recursively from the series
-            var allEpisodes = new List<Episode>();
-            
+            if (!TryLoadEpisodesAndSeasonsForSeries(series, out var allEpisodes, out var allSeasons))
+                return;
+
+            _logger.LogInformation("[MR] Retrieved {Count} episodes and {SeasonCount} seasons using recursive query", allEpisodes.Count, allSeasons.Count);
+
+            ProcessAllEpisodesFromSeriesCore(series, cfg, now, allEpisodes, allSeasons);
+        }
+        catch (Exception ex)
+        {
+            // #region agent log - PROCESS-ALL-EPISODES-ERROR: Track errors in ProcessAllEpisodesFromSeries
             try
             {
-                // Get all children of the series (seasons and episodes)
-                var query = new InternalItemsQuery
-                {
-                    ParentId = series.Id,
-                    Recursive = true
+                _logger.LogError(ex, "[MR] [DEBUG] [PROCESS-ALL-EPISODES-ERROR] ERROR in ProcessAllEpisodesFromSeries");
+                _logger.LogError("[MR] [DEBUG] [PROCESS-ALL-EPISODES-ERROR] Exception Type: {Type}", ex.GetType().FullName);
+                _logger.LogError("[MR] [DEBUG] [PROCESS-ALL-EPISODES-ERROR] Exception Message: {Message}", ex.Message);
+                _logger.LogError("[MR] [DEBUG] [PROCESS-ALL-EPISODES-ERROR] Stack Trace: {StackTrace}", ex.StackTrace ?? "N/A");
+                _logger.LogError("[MR] [DEBUG] [PROCESS-ALL-EPISODES-ERROR] Inner Exception: {InnerException}", ex.InnerException?.Message ?? "N/A");
+                _logger.LogError("[MR] [DEBUG] [PROCESS-ALL-EPISODES-ERROR] Series: {Name}, ID: {Id}, Path: {Path}", 
+                    series.Name ?? "NULL", series.Id, series.Path ?? "NULL");
+                
+                var logData = new {
+                    runId = "run1",
+                    hypothesisId = "PROCESS-ALL-EPISODES-ERROR",
+                    location = "RenameCoordinator.cs:1551",
+                    message = "Error in ProcessAllEpisodesFromSeries",
+                    data = new {
+                        seriesId = series.Id.ToString(),
+                        seriesName = series.Name ?? "NULL",
+                        seriesPath = series.Path ?? "NULL",
+                        exceptionType = ex.GetType().FullName,
+                        exceptionMessage = ex.Message,
+                        stackTrace = ex.StackTrace ?? "N/A",
+                        innerException = ex.InnerException?.Message ?? "N/A"
+                    },
+                    timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
                 };
-                
-                _logger.LogInformation("[MR] === Executing Episode Query ===");
-                _logger.LogInformation("[MR] Query: ParentId={ParentId}, Recursive={Recursive}", series.Id, true);
-                _logger.LogInformation("[MR] Series Path: {Path}", series.Path ?? "NULL");
-                _logger.LogInformation("[MR] LibraryManager Available: {Available}", _libraryManager != null);
-                
-                // #region agent log - EPISODE-QUERY-EXECUTION: Track episode query execution
-                try
-                {
-                    var logData = new {
-                        runId = "run1",
-                        hypothesisId = "EPISODE-QUERY-EXECUTION",
-                        location = "RenameCoordinator.cs:1613",
-                        message = "Executing episode query",
-                        data = new {
-                            seriesId = series.Id.ToString(),
-                            seriesName = series.Name ?? "NULL",
-                            seriesPath = series.Path ?? "NULL",
-                            queryParentId = series.Id.ToString(),
-                            queryRecursive = true,
-                            libraryManagerAvailable = _libraryManager != null
-                        },
-                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-                    };
-                    var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                    DebugLogHelper.SafeAppend( logJson);
-                }
-                catch (Exception logEx)
-                {
-                    _logger.LogError(logEx, "[MR] [DEBUG] [EPISODE-QUERY-EXECUTION] ERROR logging query execution: {Error}", logEx.Message);
-                }
-                // #endregion
-                
-                var allItems = _libraryManager.GetItemList(query);
-                _logger.LogInformation("[MR] Query returned {TotalItems} total items", allItems.Count);
-                
-                // #region agent log - EPISODE-QUERY-RESULT: Track query results
-                try
-                {
-                    // Count seasons and episodes explicitly
-                    var seasonCount = allItems.OfType<Season>().Count();
-                    var episodeCount = allItems.OfType<Episode>().Count();
-                    
-                    var logData = new {
-                        runId = "run1",
-                        hypothesisId = "EPISODE-QUERY-RESULT",
-                        location = "RenameCoordinator.cs:1715",
-                        message = "Episode query result - verifying seasons are returned",
-                        data = new {
-                            seriesId = series.Id.ToString(),
-                            seriesName = series.Name ?? "NULL",
-                            totalItemsReturned = allItems.Count,
-                            seasonCount = seasonCount,
-                            episodeCount = episodeCount,
-                            itemTypes = allItems.GroupBy(item => item.GetType().Name).Select(g => new { type = g.Key, count = g.Count() }).ToList(),
-                            seasonsFound = seasonCount > 0,
-                            episodesFound = episodeCount > 0
-                        },
-                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-                    };
-                    var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                    DebugLogHelper.SafeAppend( logJson);
-                    
-                    _logger.LogInformation("[MR] [DEBUG] [EPISODE-QUERY-RESULT] Query returned {TotalItems} items: {SeasonCount} seasons, {EpisodeCount} episodes",
-                        allItems.Count, seasonCount, episodeCount);
-                }
-                catch (Exception logEx)
-                {
-                    _logger.LogError(logEx, "[MR] [DEBUG] [EPISODE-QUERY-RESULT] ERROR logging query result: {Error}", logEx.Message);
-                }
-                // #endregion
-                
-                // Log item types found
-                var itemTypes = allItems.GroupBy(item => item.GetType().Name).ToList();
-                _logger.LogInformation("[MR] Item types found:");
-                foreach (var typeGroup in itemTypes)
-                {
-                    _logger.LogInformation("[MR]   - {Type}: {Count} items", typeGroup.Key, typeGroup.Count());
-                }
-                
-                allEpisodes = allItems.OfType<Episode>().ToList();
-                
-                // Extract seasons from query results and process them explicitly
-                // This ensures season folders are renamed even if Jellyfin doesn't fire ItemUpdated events for them
-                var allSeasons = allItems.OfType<Season>().ToList();
-                
-                _logger.LogInformation("[MR] Retrieved {Count} episodes and {SeasonCount} seasons using recursive query", allEpisodes.Count, allSeasons.Count);
-                
+                var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
+                DebugLogHelper.SafeAppend( logJson);
+            }
+            catch (Exception logEx)
+            {
+                _logger.LogError(logEx, "[MR] [DEBUG] [PROCESS-ALL-EPISODES-ERROR] ERROR logging process error: {Error}", logEx.Message);
+            }
+            // #endregion
+            
+            _logger.LogError(ex, "[MR] ERROR in ProcessAllEpisodesFromSeries: {Message}", ex.Message);
+            _logger.LogError("[MR] Stack Trace: {StackTrace}", ex.StackTrace ?? "N/A");
+        }
+    }
+
+    private void ProcessAllEpisodesFromSeriesCore(Series series, PluginConfiguration cfg, DateTime now, List<Episode> allEpisodes, List<Season> allSeasons)
+    {
                 // #region agent log - SEASONS-FOUND: Track seasons found by ProcessAllEpisodesFromSeries
                 try
                 {
@@ -1865,130 +1651,6 @@ public class RenameCoordinator
                         }
                     }
                 }
-            }
-            catch (Exception ex)
-            {
-                // #region agent log - EPISODE-QUERY-ERROR: Track episode query errors
-                try
-                {
-                    _logger.LogError(ex, "[MR] [DEBUG] [EPISODE-QUERY-ERROR] ERROR retrieving episodes using GetItemList");
-                    _logger.LogError("[MR] [DEBUG] [EPISODE-QUERY-ERROR] Exception Type: {Type}", ex.GetType().FullName);
-                    _logger.LogError("[MR] [DEBUG] [EPISODE-QUERY-ERROR] Exception Message: {Message}", ex.Message);
-                    _logger.LogError("[MR] [DEBUG] [EPISODE-QUERY-ERROR] Stack Trace: {StackTrace}", ex.StackTrace ?? "N/A");
-                    _logger.LogError("[MR] [DEBUG] [EPISODE-QUERY-ERROR] Inner Exception: {InnerException}", ex.InnerException?.Message ?? "N/A");
-                    _logger.LogError("[MR] [DEBUG] [EPISODE-QUERY-ERROR] Series: {Name}, ID: {Id}, Path: {Path}", 
-                        series.Name ?? "NULL", series.Id, series.Path ?? "NULL");
-                    
-                    var logData = new {
-                        runId = "run1",
-                        hypothesisId = "EPISODE-QUERY-ERROR",
-                        location = "RenameCoordinator.cs:1658",
-                        message = "Error retrieving episodes - attempting fallback",
-                        data = new {
-                            seriesId = series.Id.ToString(),
-                            seriesName = series.Name ?? "NULL",
-                            seriesPath = series.Path ?? "NULL",
-                            exceptionType = ex.GetType().FullName,
-                            exceptionMessage = ex.Message,
-                            stackTrace = ex.StackTrace ?? "N/A",
-                            innerException = ex.InnerException?.Message ?? "N/A"
-                        },
-                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-                    };
-                    var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                    DebugLogHelper.SafeAppend( logJson);
-                }
-                catch (Exception logEx)
-                {
-                    _logger.LogError(logEx, "[MR] [DEBUG] [EPISODE-QUERY-ERROR] ERROR logging query error: {Error}", logEx.Message);
-                }
-                // #endregion
-                
-                _logger.LogWarning(ex, "[MR] Could not retrieve episodes using GetItemList. Trying alternative method: {Message}", ex.Message);
-                
-                // Fallback: Try to get episodes from series directly
-                // This is a fallback in case the query method doesn't work
-                try
-                {
-                    _logger.LogInformation("[MR] [DEBUG] Attempting fallback method to retrieve episodes");
-                    
-                    // Get all items recursively and filter for episodes
-                    // This should work even if IncludeItemTypes has issues
-                    var query = new InternalItemsQuery
-                    {
-                        ParentId = series.Id,
-                        Recursive = true
-                    };
-                    
-                    var allItems = _libraryManager.GetItemList(query);
-                    allEpisodes = allItems.OfType<Episode>().ToList();
-                    
-                    _logger.LogInformation("[MR] Retrieved {Count} episodes using fallback recursive method", allEpisodes.Count);
-                    
-                    // #region agent log - EPISODE-QUERY-FALLBACK-SUCCESS: Track fallback success
-                    try
-                    {
-                        var logData = new {
-                            runId = "run1",
-                            hypothesisId = "EPISODE-QUERY-FALLBACK-SUCCESS",
-                            location = "RenameCoordinator.cs:1677",
-                            message = "Fallback method succeeded",
-                            data = new {
-                                seriesId = series.Id.ToString(),
-                                seriesName = series.Name ?? "NULL",
-                                episodesRetrieved = allEpisodes.Count
-                            },
-                            timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-                        };
-                        var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                        DebugLogHelper.SafeAppend( logJson);
-                    }
-                    catch (Exception logEx)
-                    {
-                        _logger.LogError(logEx, "[MR] [DEBUG] [EPISODE-QUERY-FALLBACK-SUCCESS] ERROR logging fallback success: {Error}", logEx.Message);
-                    }
-                    // #endregion
-                }
-                catch (Exception fallbackEx)
-                {
-                    // #region agent log - EPISODE-QUERY-FALLBACK-ERROR: Track fallback failure
-                    try
-                    {
-                        _logger.LogError(fallbackEx, "[MR] [DEBUG] [EPISODE-QUERY-FALLBACK-ERROR] ERROR in fallback method");
-                        _logger.LogError("[MR] [DEBUG] [EPISODE-QUERY-FALLBACK-ERROR] Exception Type: {Type}", fallbackEx.GetType().FullName);
-                        _logger.LogError("[MR] [DEBUG] [EPISODE-QUERY-FALLBACK-ERROR] Exception Message: {Message}", fallbackEx.Message);
-                        _logger.LogError("[MR] [DEBUG] [EPISODE-QUERY-FALLBACK-ERROR] Stack Trace: {StackTrace}", fallbackEx.StackTrace ?? "N/A");
-                        _logger.LogError("[MR] [DEBUG] [EPISODE-QUERY-FALLBACK-ERROR] Series: {Name}, ID: {Id}", series.Name ?? "NULL", series.Id);
-                        
-                        var logData = new {
-                            runId = "run1",
-                            hypothesisId = "EPISODE-QUERY-FALLBACK-ERROR",
-                            location = "RenameCoordinator.cs:1680",
-                            message = "Fallback method also failed - cannot retrieve episodes",
-                            data = new {
-                                seriesId = series.Id.ToString(),
-                                seriesName = series.Name ?? "NULL",
-                                exceptionType = fallbackEx.GetType().FullName,
-                                exceptionMessage = fallbackEx.Message,
-                                stackTrace = fallbackEx.StackTrace ?? "N/A",
-                                innerException = fallbackEx.InnerException?.Message ?? "N/A"
-                            },
-                            timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-                        };
-                        var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                        DebugLogHelper.SafeAppend( logJson);
-                    }
-                    catch (Exception logEx)
-                    {
-                        _logger.LogError(logEx, "[MR] [DEBUG] [EPISODE-QUERY-FALLBACK-ERROR] ERROR logging fallback error: {Error}", logEx.Message);
-                    }
-                    // #endregion
-                    
-                    _logger.LogError(fallbackEx, "[MR] Could not retrieve episodes using fallback method: {Message}", fallbackEx.Message);
-                    _logger.LogError("[MR] [DEBUG] Cannot proceed with episode processing - both query methods failed");
-                    return;
-                }
-            }
 
             _logger.LogInformation("[MR] Found {Count} total episodes in series", allEpisodes.Count);
 
@@ -2724,51 +2386,10 @@ public class RenameCoordinator
 
             // Process retry queue after processing all episodes
             ProcessRetryQueue(cfg, now);
-        }
-        catch (Exception ex)
-        {
-            // #region agent log - PROCESS-ALL-EPISODES-ERROR: Track errors in ProcessAllEpisodesFromSeries
-            try
-            {
-                _logger.LogError(ex, "[MR] [DEBUG] [PROCESS-ALL-EPISODES-ERROR] ERROR in ProcessAllEpisodesFromSeries");
-                _logger.LogError("[MR] [DEBUG] [PROCESS-ALL-EPISODES-ERROR] Exception Type: {Type}", ex.GetType().FullName);
-                _logger.LogError("[MR] [DEBUG] [PROCESS-ALL-EPISODES-ERROR] Exception Message: {Message}", ex.Message);
-                _logger.LogError("[MR] [DEBUG] [PROCESS-ALL-EPISODES-ERROR] Stack Trace: {StackTrace}", ex.StackTrace ?? "N/A");
-                _logger.LogError("[MR] [DEBUG] [PROCESS-ALL-EPISODES-ERROR] Inner Exception: {InnerException}", ex.InnerException?.Message ?? "N/A");
-                _logger.LogError("[MR] [DEBUG] [PROCESS-ALL-EPISODES-ERROR] Series: {Name}, ID: {Id}, Path: {Path}", 
-                    series.Name ?? "NULL", series.Id, series.Path ?? "NULL");
-                
-                var logData = new {
-                    runId = "run1",
-                    hypothesisId = "PROCESS-ALL-EPISODES-ERROR",
-                    location = "RenameCoordinator.cs:1551",
-                    message = "Error in ProcessAllEpisodesFromSeries",
-                    data = new {
-                        seriesId = series.Id.ToString(),
-                        seriesName = series.Name ?? "NULL",
-                        seriesPath = series.Path ?? "NULL",
-                        exceptionType = ex.GetType().FullName,
-                        exceptionMessage = ex.Message,
-                        stackTrace = ex.StackTrace ?? "N/A",
-                        innerException = ex.InnerException?.Message ?? "N/A"
-                    },
-                    timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-                };
-                var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                DebugLogHelper.SafeAppend( logJson);
-            }
-            catch (Exception logEx)
-            {
-                _logger.LogError(logEx, "[MR] [DEBUG] [PROCESS-ALL-EPISODES-ERROR] ERROR logging process error: {Error}", logEx.Message);
-            }
-            // #endregion
-            
-            _logger.LogError(ex, "[MR] ERROR in ProcessAllEpisodesFromSeries: {Message}", ex.Message);
-            _logger.LogError("[MR] Stack Trace: {StackTrace}", ex.StackTrace ?? "N/A");
-        }
+
     }
 
-    /// <summary>
+        /// <summary>
     /// Processes all series in the library for bulk refresh (Replace all metadata).
     /// </summary>
     private void ProcessAllSeriesInLibrary(PluginConfiguration cfg, DateTime now)
