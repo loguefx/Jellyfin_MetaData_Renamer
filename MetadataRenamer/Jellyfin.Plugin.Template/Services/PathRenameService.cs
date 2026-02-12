@@ -346,13 +346,13 @@ public class PathRenameService
                 else
                 {
                     _logger.LogError("[MR] [DEBUG] [SEASON-RENAME-VERIFICATION-FAILED] ✗ Verification FAILED: New folder does not exist after rename! Expected: {Path}, SeasonId={Id}", 
-                        newFullPath, season.Id);
+                        newFullPath, season?.Id);
                 }
             }
             catch (Exception renameEx)
             {
                 _logger.LogError(renameEx, "[MR] [DEBUG] [SEASON-RENAME-ERROR-DURING-MOVE] ERROR during Directory.Move: Exception Type={Type}, Message={Message}, SeasonId={Id}, SeasonNumber={SeasonNumber}", 
-                    renameEx.GetType().FullName, renameEx.Message, season.Id, season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+                    renameEx.GetType().FullName, renameEx.Message, season?.Id, season?.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
                 _logger.LogError("[MR] [DEBUG] [SEASON-RENAME-ERROR-DURING-MOVE] Stack Trace: {StackTrace}", renameEx.StackTrace ?? "N/A");
                 throw; // Re-throw to be caught by outer catch blocks
             }
@@ -360,26 +360,26 @@ public class PathRenameService
         catch (UnauthorizedAccessException ex)
         {
             _logger.LogError(ex, "[MR] [DEBUG] [SEASON-RENAME-ERROR-UNAUTHORIZED] ERROR: UnauthorizedAccessException - Permission denied. From: {From}, To: {To}, SeasonId={Id}, SeasonNumber={SeasonNumber}", 
-                currentPath, newFullPath, season.Id, season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+                currentPath, newFullPath, season?.Id, season?.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
             _logger.LogError("[MR] [DEBUG] [SEASON-RENAME-ERROR-UNAUTHORIZED] Stack Trace: {StackTrace}", ex.StackTrace ?? "N/A");
         }
         catch (DirectoryNotFoundException ex)
         {
             _logger.LogError(ex, "[MR] [DEBUG] [SEASON-RENAME-ERROR-DIRECTORY-NOT-FOUND] ERROR: DirectoryNotFoundException - Source directory not found. Path: {Path}, SeasonId={Id}, SeasonNumber={SeasonNumber}", 
-                currentPath, season.Id, season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+                currentPath, season?.Id, season?.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
             _logger.LogError("[MR] [DEBUG] [SEASON-RENAME-ERROR-DIRECTORY-NOT-FOUND] Stack Trace: {StackTrace}", ex.StackTrace ?? "N/A");
         }
         catch (IOException ex)
         {
             _logger.LogError(ex, "[MR] [DEBUG] [SEASON-RENAME-ERROR-IO] ERROR: IOException - File system error. From: {From}, To: {To}, Message: {Message}, SeasonId={Id}, SeasonNumber={SeasonNumber}", 
-                currentPath, newFullPath, ex.Message, season.Id, season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+                currentPath, newFullPath, ex.Message, season?.Id, season?.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
             _logger.LogError("[MR] [DEBUG] [SEASON-RENAME-ERROR-IO] Stack Trace: {StackTrace}", ex.StackTrace ?? "N/A");
             _logger.LogError("[MR] [DEBUG] [SEASON-RENAME-ERROR-IO] Inner Exception: {InnerException}", ex.InnerException?.Message ?? "N/A");
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "[MR] [DEBUG] [SEASON-RENAME-ERROR-UNEXPECTED] ERROR: Unexpected exception during rename. Type: {Type}, Message: {Message}, SeasonId={Id}, SeasonNumber={SeasonNumber}", 
-                ex.GetType().FullName, ex.Message, season.Id, season.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+                ex.GetType().FullName, ex.Message, season?.Id, season?.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
             _logger.LogError("[MR] [DEBUG] [SEASON-RENAME-ERROR-UNEXPECTED] Stack Trace: {StackTrace}", ex.StackTrace ?? "N/A");
             _logger.LogError("[MR] [DEBUG] [SEASON-RENAME-ERROR-UNEXPECTED] Inner Exception: {InnerException}", ex.InnerException?.Message ?? "N/A");
         }
@@ -692,7 +692,7 @@ public class PathRenameService
         }
         catch (UnauthorizedAccessException ex)
         {
-            var seasonNumber = episode.ParentIndexNumber;
+            var seasonNumber = episode?.ParentIndexNumber;
             var isSeason2Plus = seasonNumber.HasValue && seasonNumber.Value >= 2;
             _logger.LogError(ex, "[MR] ERROR: UnauthorizedAccessException - Permission denied. From: {From}, To: {To} (Season2Plus={IsSeason2Plus})", 
                 currentPath, newFullPath, isSeason2Plus);
@@ -707,8 +707,8 @@ public class PathRenameService
                         location = "PathRenameService.cs:454",
                         message = "UnauthorizedAccessException during Season 2+ episode rename",
                         data = new {
-                            episodeId = episode.Id.ToString(),
-                            episodeName = episode.Name ?? "NULL",
+                            episodeId = episode?.Id.ToString() ?? "NULL",
+                            episodeName = episode?.Name ?? "NULL",
                             seasonNumber = seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
                             exceptionType = ex.GetType().FullName,
                             exceptionMessage = ex.Message,
@@ -726,7 +726,7 @@ public class PathRenameService
         }
         catch (FileNotFoundException ex)
         {
-            var seasonNumber = episode.ParentIndexNumber;
+            var seasonNumber = episode?.ParentIndexNumber;
             var isSeason2Plus = seasonNumber.HasValue && seasonNumber.Value >= 2;
             _logger.LogError(ex, "[MR] ERROR: FileNotFoundException - Source file not found. Path: {Path} (Season2Plus={IsSeason2Plus})", 
                 currentPath, isSeason2Plus);
@@ -741,8 +741,8 @@ public class PathRenameService
                         location = "PathRenameService.cs:459",
                         message = "FileNotFoundException during Season 2+ episode rename",
                         data = new {
-                            episodeId = episode.Id.ToString(),
-                            episodeName = episode.Name ?? "NULL",
+                            episodeId = episode?.Id.ToString() ?? "NULL",
+                            episodeName = episode?.Name ?? "NULL",
                             seasonNumber = seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
                             exceptionType = ex.GetType().FullName,
                             exceptionMessage = ex.Message,
@@ -759,7 +759,7 @@ public class PathRenameService
         }
         catch (IOException ex)
         {
-            var seasonNumber = episode.ParentIndexNumber;
+            var seasonNumber = episode?.ParentIndexNumber;
             var isSeason2Plus = seasonNumber.HasValue && seasonNumber.Value >= 2;
             _logger.LogError(ex, "[MR] ERROR: IOException - File system error. From: {From}, To: {To}, Message: {Message} (Season2Plus={IsSeason2Plus})", 
                 currentPath, newFullPath, ex.Message, isSeason2Plus);
@@ -774,8 +774,8 @@ public class PathRenameService
                         location = "PathRenameService.cs:464",
                         message = "IOException during Season 2+ episode rename",
                         data = new {
-                            episodeId = episode.Id.ToString(),
-                            episodeName = episode.Name ?? "NULL",
+                            episodeId = episode?.Id.ToString() ?? "NULL",
+                            episodeName = episode?.Name ?? "NULL",
                             seasonNumber = seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
                             exceptionType = ex.GetType().FullName,
                             exceptionMessage = ex.Message,
@@ -793,7 +793,7 @@ public class PathRenameService
         }
         catch (Exception ex)
         {
-            var seasonNumber = episode.ParentIndexNumber;
+            var seasonNumber = episode?.ParentIndexNumber;
             var isSeason2Plus = seasonNumber.HasValue && seasonNumber.Value >= 2;
             _logger.LogError(ex, "[MR] ERROR: Unexpected exception during rename. Type: {Type}, Message: {Message} (Season2Plus={IsSeason2Plus})", 
                 ex.GetType().Name, ex.Message, isSeason2Plus);
@@ -809,8 +809,8 @@ public class PathRenameService
                         location = "PathRenameService.cs:466",
                         message = "Unexpected exception during Season 2+ episode rename",
                         data = new {
-                            episodeId = episode.Id.ToString(),
-                            episodeName = episode.Name ?? "NULL",
+                            episodeId = episode?.Id.ToString() ?? "NULL",
+                            episodeName = episode?.Name ?? "NULL",
                             seasonNumber = seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
                             exceptionType = ex.GetType().FullName,
                             exceptionMessage = ex.Message,
