@@ -1126,163 +1126,116 @@ public class RenameCoordinator
         return _pathRenamer.TryRenameSeriesFolder(series, desiredFolderName, cfg.DryRun);
     }
 
+    private static bool ComputeShouldProcessEpisodes(Series series, PluginConfiguration cfg)
+    {
+        return cfg.RenameEpisodeFiles && !cfg.DryRun && series.ProviderIds != null && series.ProviderIds.Count > 0;
+    }
+
+    private bool ComputeShouldReprocess(Series series, bool renameSuccessful, bool providerIdsChanged, bool seriesIsIdentified, PluginConfiguration cfg)
+    {
+        return providerIdsChanged
+            || !_seriesProcessedForEpisodes.Contains(series.Id)
+            || (renameSuccessful && !_seriesProcessedForEpisodes.Contains(series.Id))
+            || (cfg.ProcessDuringLibraryScans && seriesIsIdentified);
+    }
+
+    private void LogEpisodeProcessingDecision(Series series, bool renameSuccessful, bool providerIdsChanged, bool shouldProcessEpisodes, PluginConfiguration cfg)
+    {
+        _logger.LogInformation("[MR] === Episode Processing Decision ===");
+        _logger.LogInformation("[MR] renameSuccessful: {RenameSuccessful}", renameSuccessful);
+        _logger.LogInformation("[MR] cfg.RenameEpisodeFiles: {RenameEpisodeFiles}", cfg.RenameEpisodeFiles);
+        _logger.LogInformation("[MR] cfg.DryRun: {DryRun}", cfg.DryRun);
+        _logger.LogInformation("[MR] providerIdsChanged: {ProviderIdsChanged}", providerIdsChanged);
+        _logger.LogInformation("[MR] Series ID: {SeriesId}, Series Name: {SeriesName}", series.Id, series.Name);
+        _logger.LogInformation("[MR] Series has provider IDs: {HasProviderIds}", series.ProviderIds?.Count > 0);
+        _logger.LogInformation("[MR] [DEBUG] shouldProcessEpisodes: {ShouldProcess}", shouldProcessEpisodes);
+        _logger.LogInformation("[MR] [DEBUG]   - Already processed: {AlreadyProcessed}", _seriesProcessedForEpisodes.Contains(series.Id));
+    }
+
+    private void LogReprocessReason(bool providerIdsChanged, bool renameSuccessful, bool seriesIsIdentified, PluginConfiguration cfg)
+    {
+        if (providerIdsChanged)
+            _logger.LogInformation("[MR] [DEBUG] Reason: Provider IDs changed (series identified)");
+        else if (renameSuccessful)
+            _logger.LogInformation("[MR] [DEBUG] Reason: Series folder renamed");
+        else if (cfg.ProcessDuringLibraryScans && seriesIsIdentified)
+            _logger.LogInformation("[MR] [DEBUG] Reason: Library scan in progress (ProcessDuringLibraryScans enabled) - reprocessing identified series to catch metadata updates");
+        else
+            _logger.LogInformation("[MR] [DEBUG] Reason: Series has provider IDs and episodes need processing");
+    }
+
+    private void TryLogProcessAllEpisodesCall(Series series, bool providerIdsChanged, bool renameSuccessful)
+    {
+        try
+        {
+            var hasProviderIds = series.ProviderIds != null && series.ProviderIds.Count > 0;
+            _logger.LogWarning("[MR] [DEBUG] [PROCESS-ALL-EPISODES] ProcessAllEpisodesFromSeries called: SeriesId={SeriesId}, SeriesName='{SeriesName}', ProviderIdsChanged={ProviderIdsChanged}, RenameSuccessful={RenameSuccessful}, HasProviderIds={HasProviderIds}",
+                series.Id.ToString(), series.Name ?? "NULL", providerIdsChanged, renameSuccessful, hasProviderIds);
+            var logData = new { runId = "run1", hypothesisId = "PROCESS-ALL-EPISODES", location = "RenameCoordinator.cs", message = "ProcessAllEpisodesFromSeries called", data = new { seriesId = series.Id.ToString(), seriesName = series.Name ?? "NULL", providerIdsChanged, renameSuccessful, hasProviderIds }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
+            DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(logData) + "\n");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[MR] [DEBUG] [PROCESS-ALL-EPISODES] ERROR logging ProcessAllEpisodesFromSeries call: {Error}", ex.Message);
+        }
+    }
+
+    private void TryLogSkipEpisodeProcessing(Series series, bool providerIdsChanged, bool renameSuccessful)
+    {
+        try
+        {
+            _logger.LogInformation("[MR] [DEBUG] [SKIP-EPISODE-PROCESSING] Episode processing skipped for series: SeriesId={SeriesId}, SeriesName='{SeriesName}', ProviderIdsChanged={ProviderIdsChanged}, AlreadyProcessed={AlreadyProcessed}, RenameSuccessful={RenameSuccessful}",
+                series.Id, series.Name ?? "NULL", providerIdsChanged, _seriesProcessedForEpisodes.Contains(series.Id), renameSuccessful);
+            var logData = new { runId = "run1", hypothesisId = "SKIP-EPISODE-PROCESSING", location = "RenameCoordinator.cs", message = "Episode processing skipped - already processed", data = new { seriesId = series.Id.ToString(), seriesName = series.Name ?? "NULL", providerIdsChanged, alreadyProcessed = _seriesProcessedForEpisodes.Contains(series.Id), renameSuccessful }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
+            DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(logData) + "\n");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[MR] [DEBUG] [SKIP-EPISODE-PROCESSING] ERROR logging skip: {Error}", ex.Message);
+        }
+    }
+
+    private void LogNotProcessingEpisodesReasons(Series series, PluginConfiguration cfg)
+    {
+        _logger.LogInformation("[MR] === DECISION: Not processing all episodes. Reasons:");
+        if (!cfg.RenameEpisodeFiles)
+            _logger.LogInformation("[MR]   - RenameEpisodeFiles is disabled");
+        if (cfg.DryRun)
+            _logger.LogInformation("[MR]   - DryRun mode is enabled");
+        if (series.ProviderIds == null || series.ProviderIds.Count == 0)
+            _logger.LogInformation("[MR]   - Series has no provider IDs (not identified)");
+    }
+
     private void MaybeProcessEpisodesForSeries(Series series, PluginConfiguration cfg, DateTime now, bool renameSuccessful, bool providerIdsChanged, bool seriesIsIdentified, bool seriesRenameOnCooldown)
     {
-        // DEBUG: Log detailed decision-making for episode processing
-            _logger.LogInformation("[MR] === Episode Processing Decision ===");
-            _logger.LogInformation("[MR] renameSuccessful: {RenameSuccessful}", renameSuccessful);
-            _logger.LogInformation("[MR] cfg.RenameEpisodeFiles: {RenameEpisodeFiles}", cfg.RenameEpisodeFiles);
-            _logger.LogInformation("[MR] cfg.DryRun: {DryRun}", cfg.DryRun);
-            _logger.LogInformation("[MR] providerIdsChanged: {ProviderIdsChanged}", providerIdsChanged);
-            _logger.LogInformation("[MR] Series ID: {SeriesId}, Series Name: {SeriesName}", series.Id, series.Name);
-            _logger.LogInformation("[MR] Series has provider IDs: {HasProviderIds}", series.ProviderIds?.Count > 0);
+        var shouldProcessEpisodes = ComputeShouldProcessEpisodes(series, cfg);
+        LogEpisodeProcessingDecision(series, renameSuccessful, providerIdsChanged, shouldProcessEpisodes, cfg);
 
-            // ALWAYS process all episodes when:
-            // - RenameEpisodeFiles is enabled
-            // - Not in dry-run mode
-            // - Series has provider IDs (identified)
-            // This ensures ALL seasons are processed automatically when a series is identified
-            var shouldProcessEpisodes = cfg.RenameEpisodeFiles && 
-                                       !cfg.DryRun && 
-                                       series.ProviderIds != null && 
-                                       series.ProviderIds.Count > 0;
+        if (!shouldProcessEpisodes)
+        {
+            LogNotProcessingEpisodesReasons(series, cfg);
+            return;
+        }
 
-            _logger.LogInformation("[MR] [DEBUG] === Series Episode Processing Decision ===");
-            _logger.LogInformation("[MR] [DEBUG] shouldProcessEpisodes: {ShouldProcess}", shouldProcessEpisodes);
-            _logger.LogInformation("[MR] [DEBUG]   - RenameEpisodeFiles: {RenameEpisodes}", cfg.RenameEpisodeFiles);
-            _logger.LogInformation("[MR] [DEBUG]   - DryRun: {DryRun}", cfg.DryRun);
-            _logger.LogInformation("[MR] [DEBUG]   - Has Provider IDs: {HasProviderIds} (Count: {Count})", 
-                series.ProviderIds != null && series.ProviderIds.Count > 0, 
-                series.ProviderIds?.Count ?? 0);
-            _logger.LogInformation("[MR] [DEBUG]   - Already processed: {AlreadyProcessed}", 
-                _seriesProcessedForEpisodes.Contains(series.Id));
+        var shouldReprocess = ComputeShouldReprocess(series, renameSuccessful, providerIdsChanged, seriesIsIdentified, cfg);
+        _logger.LogInformation("[MR] [DEBUG] shouldReprocess: {ShouldReprocess}", shouldReprocess);
 
-            if (shouldProcessEpisodes)
-            {
-                // Check if we've already processed this series recently (avoid duplicate processing)
-                // Process episodes if:
-                // - Provider IDs changed (series was identified) - ALWAYS process (this ensures all seasons are processed when a series is identified)
-                // - Series hasn't been processed for episodes yet - ALWAYS process
-                // - Series folder was renamed (and not already processed) - Process if rename happened
-                // - ProcessDuringLibraryScans is enabled - Process episodes during library scans to catch metadata updates
-                //   This ensures that if metadata is updated during a scan, episodes are reprocessed
-                //   IMPORTANT: This only applies to identified series (series with provider IDs)
-                var shouldReprocess = providerIdsChanged || 
-                                     !_seriesProcessedForEpisodes.Contains(series.Id) ||
-                                     (renameSuccessful && !_seriesProcessedForEpisodes.Contains(series.Id)) ||
-                                     (cfg.ProcessDuringLibraryScans && seriesIsIdentified); // Process during library scans for identified series
-
-                _logger.LogInformation("[MR] [DEBUG] shouldReprocess: {ShouldReprocess}", shouldReprocess);
-                _logger.LogInformation("[MR] [DEBUG]   - providerIdsChanged: {Changed}", providerIdsChanged);
-                _logger.LogInformation("[MR] [DEBUG]   - Not in processed set: {NotProcessed}", !_seriesProcessedForEpisodes.Contains(series.Id));
-                _logger.LogInformation("[MR] [DEBUG]   - renameSuccessful: {Renamed}", renameSuccessful);
-                _logger.LogInformation("[MR] [DEBUG]   - seriesRenameOnCooldown: {OnCooldown}", seriesRenameOnCooldown);
-                _logger.LogInformation("[MR] [DEBUG]   - ProcessDuringLibraryScans: {ProcessDuringLibraryScans}", cfg.ProcessDuringLibraryScans);
-                _logger.LogInformation("[MR] [DEBUG]   - seriesIsIdentified: {IsIdentified} (has provider IDs)", seriesIsIdentified);
-
-                if (shouldReprocess)
-                {
-                    _logger.LogInformation("[MR] === DECISION: Processing all episodes from all seasons ===");
-                    _logger.LogInformation("[MR] Series: {Name}, ID: {Id}", series.Name ?? "NULL", series.Id);
-                    if (providerIdsChanged)
-                    {
-                        _logger.LogInformation("[MR] [DEBUG] Reason: Provider IDs changed (series identified)");
-                    }
-                    else if (renameSuccessful)
-                    {
-                        _logger.LogInformation("[MR] [DEBUG] Reason: Series folder renamed");
-                    }
-                    else if (cfg.ProcessDuringLibraryScans && seriesIsIdentified)
-                    {
-                        _logger.LogInformation("[MR] [DEBUG] Reason: Library scan in progress (ProcessDuringLibraryScans enabled) - reprocessing identified series to catch metadata updates");
-                    }
-                    else
-                    {
-                        _logger.LogInformation("[MR] [DEBUG] Reason: Series has provider IDs and episodes need processing");
-                    }
-
-                    // #region agent log - PROCESS-ALL-EPISODES: Track when ProcessAllEpisodesFromSeries is called
-                    try
-                    {
-                        _logger.LogWarning("[MR] [DEBUG] [PROCESS-ALL-EPISODES] ProcessAllEpisodesFromSeries called: SeriesId={SeriesId}, SeriesName='{SeriesName}', ProviderIdsChanged={ProviderIdsChanged}, RenameSuccessful={RenameSuccessful}, HasProviderIds={HasProviderIds}",
-                            series.Id.ToString(), series.Name ?? "NULL", providerIdsChanged, renameSuccessful,
-                            series.ProviderIds != null && series.ProviderIds.Count > 0);
-                        
-                        var logData = new { 
-                            runId = "run1", 
-                            hypothesisId = "PROCESS-ALL-EPISODES", 
-                            location = "RenameCoordinator.cs:1001", 
-                            message = "ProcessAllEpisodesFromSeries called", 
-                            data = new { 
-                                seriesId = series.Id.ToString(),
-                                seriesName = series.Name ?? "NULL",
-                                providerIdsChanged = providerIdsChanged,
-                                renameSuccessful = renameSuccessful,
-                                hasProviderIds = series.ProviderIds != null && series.ProviderIds.Count > 0
-                            }, 
-                            timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() 
-                        };
-                        var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                        DebugLogHelper.SafeAppend( logJson);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, "[MR] [DEBUG] [PROCESS-ALL-EPISODES] ERROR logging ProcessAllEpisodesFromSeries call: {Error}", ex.Message);
-                        DebugLogHelper.SafeAppend( System.Text.Json.JsonSerializer.Serialize(new { runId = "run1", hypothesisId = "PROCESS-ALL-EPISODES", location = "RenameCoordinator.cs:1001", message = "ERROR logging ProcessAllEpisodesFromSeries call", data = new { error = ex.Message }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
-                    }
-                    // #endregion
-                    
-                    ProcessAllEpisodesFromSeries(series, cfg, now);
-                    _seriesProcessedForEpisodes.Add(series.Id);
-                    _logger.LogInformation("[MR] [DEBUG] Series {Id} marked as processed for episodes", series.Id);
-                }
-                else
-                {
-                    _logger.LogInformation("[MR] === DECISION: Skipping episode processing (already processed recently) ===");
-                    _logger.LogInformation("[MR] [DEBUG] Series {Id} was already processed. Skipping to avoid duplicate processing.", series.Id);
-                    
-                    // #region agent log - SKIP-EPISODE-PROCESSING: Track when episode processing is skipped
-                    try
-                    {
-                        _logger.LogInformation("[MR] [DEBUG] [SKIP-EPISODE-PROCESSING] Episode processing skipped for series: SeriesId={SeriesId}, SeriesName='{SeriesName}', ProviderIdsChanged={ProviderIdsChanged}, AlreadyProcessed={AlreadyProcessed}, RenameSuccessful={RenameSuccessful}",
-                            series.Id, series.Name ?? "NULL", providerIdsChanged, _seriesProcessedForEpisodes.Contains(series.Id), renameSuccessful);
-                        
-                        var logData = new { 
-                            runId = "run1", 
-                            hypothesisId = "SKIP-EPISODE-PROCESSING", 
-                            location = "RenameCoordinator.cs:1273", 
-                            message = "Episode processing skipped - already processed", 
-                            data = new { 
-                                seriesId = series.Id.ToString(),
-                                seriesName = series.Name ?? "NULL",
-                                providerIdsChanged = providerIdsChanged,
-                                alreadyProcessed = _seriesProcessedForEpisodes.Contains(series.Id),
-                                renameSuccessful = renameSuccessful
-                            }, 
-                            timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() 
-                        };
-                        var logJson = System.Text.Json.JsonSerializer.Serialize(logData) + "\n";
-                        DebugLogHelper.SafeAppend( logJson);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, "[MR] [DEBUG] [SKIP-EPISODE-PROCESSING] ERROR logging skip: {Error}", ex.Message);
-                    }
-                    // #endregion
-                }
-            }
-            else
-            {
-                _logger.LogInformation("[MR] === DECISION: Not processing all episodes. Reasons:");
-                if (!cfg.RenameEpisodeFiles)
-                    _logger.LogInformation("[MR]   - RenameEpisodeFiles is disabled");
-                if (cfg.DryRun)
-                    _logger.LogInformation("[MR]   - DryRun mode is enabled");
-                if (series.ProviderIds == null || series.ProviderIds.Count == 0)
-                    _logger.LogInformation("[MR]   - Series has no provider IDs (not identified)");
-            }
-
-            _logger.LogInformation("[MR] ===== Processing Complete =====");
+        if (shouldReprocess)
+        {
+            _logger.LogInformation("[MR] === DECISION: Processing all episodes from all seasons ===");
+            _logger.LogInformation("[MR] Series: {Name}, ID: {Id}", series.Name ?? "NULL", series.Id);
+            LogReprocessReason(providerIdsChanged, renameSuccessful, seriesIsIdentified, cfg);
+            TryLogProcessAllEpisodesCall(series, providerIdsChanged, renameSuccessful);
+            ProcessAllEpisodesFromSeries(series, cfg, now);
+            _seriesProcessedForEpisodes.Add(series.Id);
+            _logger.LogInformation("[MR] [DEBUG] Series {Id} marked as processed for episodes", series.Id);
+        }
+        else
+        {
+            _logger.LogInformation("[MR] === DECISION: Skipping episode processing (already processed recently) ===");
+            _logger.LogInformation("[MR] [DEBUG] Series {Id} was already processed. Skipping to avoid duplicate processing.", series.Id);
+            TryLogSkipEpisodeProcessing(series, providerIdsChanged, renameSuccessful);
+        }
     }
 
     private bool ProcessAllEpisodesFromSeriesGuard(Series series, PluginConfiguration cfg)
