@@ -50,6 +50,7 @@ public class RenameCoordinator
     private const int BulkUpdateThreshold = 5; // Number of series updates in time window to trigger bulk processing
     private const int BulkUpdateTimeWindowSeconds = 10; // Time window for detecting bulk updates
     private const int BulkProcessingCooldownMinutes = 5; // Cooldown between bulk processing runs
+    private static readonly TimeSpan RegexMatchTimeout = TimeSpan.FromSeconds(1); // S6444: prevent ReDoS
 
     /// <summary>
     /// Initializes a new instance of the <see cref="RenameCoordinator"/> class.
@@ -324,7 +325,7 @@ public class RenameCoordinator
         try
         {
             var isFilenamePattern = !string.IsNullOrWhiteSpace(episodeName) && 
-                                  System.Text.RegularExpressions.Regex.IsMatch(episodeName, @"[Ss]\d+[Ee]\d+", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                                  System.Text.RegularExpressions.Regex.IsMatch(episodeName, @"[Ss]\d+[Ee]\d+", System.Text.RegularExpressions.RegexOptions.IgnoreCase, RegexMatchTimeout);
             _logger.LogInformation("[MR] [DEBUG] [EPISODE-TITLE-EXTRACTION] EpisodeId={EpisodeId}, OriginalName='{OriginalName}', Season={Season}, Episode={Episode}, CleanTitle='{CleanTitle}', IsEmpty={IsEmpty}, IsFilenamePattern={IsFilenamePattern}",
                 episode.Id.ToString(), episodeName, 
                 seasonNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
@@ -530,7 +531,7 @@ public class RenameCoordinator
         try
         {
             var currentFileName = !string.IsNullOrWhiteSpace(episode.Path) ? Path.GetFileNameWithoutExtension(episode.Path) : "NULL";
-            var isFilenamePattern = !string.IsNullOrWhiteSpace(episode.Name) && System.Text.RegularExpressions.Regex.IsMatch(episode.Name, @"[Ss]\d+[Ee]\d+", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            var isFilenamePattern = !string.IsNullOrWhiteSpace(episode.Name) && System.Text.RegularExpressions.Regex.IsMatch(episode.Name, @"[Ss]\d+[Ee]\d+", System.Text.RegularExpressions.RegexOptions.IgnoreCase, RegexMatchTimeout);
             var logData = new { runId = "run1", hypothesisId = "EPISODE-METADATA", location = "RenameCoordinator.cs:405", message = "Episode ItemUpdated event - full metadata state", data = new { episodeId = episode.Id.ToString(), episodeName = episode.Name ?? "NULL", episodeNameIsFilenamePattern = isFilenamePattern, episodePath = episode.Path ?? "NULL", currentFileName = currentFileName, episodeIndexNumber = episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", parentIndexNumber = episode.ParentIndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", seriesName = episode.Series?.Name ?? "NULL", seriesId = episode.Series?.Id.ToString() ?? "NULL", seriesPath = episode.Series?.Path ?? "NULL", seriesHasProviderIds = episode.Series?.ProviderIds != null && episode.Series.ProviderIds.Count > 0 }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
             DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(logData) + "\n");
             _logger.LogInformation("[MR] [EPISODE-METADATA] Episode ItemUpdated: Id={Id}, Name='{Name}' (isPattern={IsPattern}), Path={Path}, S{Season}E{Episode}", episode.Id, episode.Name ?? "NULL", isFilenamePattern, episode.Path ?? "NULL", episode.ParentIndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "??", episode.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "??");
@@ -1736,7 +1737,7 @@ public class RenameCoordinator
                     indexNumber = ep.IndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
                     parentIndexNumber = ep.ParentIndexNumber?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
                     isFilenamePattern = !string.IsNullOrWhiteSpace(ep.Name) && 
-                                      System.Text.RegularExpressions.Regex.IsMatch(ep.Name, @"[Ss]\d+[Ee]\d+", System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+                                      System.Text.RegularExpressions.Regex.IsMatch(ep.Name, @"[Ss]\d+[Ee]\d+", System.Text.RegularExpressions.RegexOptions.IgnoreCase, RegexMatchTimeout)
                 }).ToList();
                 
                 _logger.LogWarning("[MR] [DEBUG] [EPISODES-FOUND] ProcessAllEpisodesFromSeries found {TotalEpisodes} episodes for SeriesId={SeriesId}, SeriesName='{SeriesName}'",
@@ -2872,16 +2873,18 @@ public class RenameCoordinator
             // Pattern 1: Standard season folders (Season 1, Season 01, S1, etc.)
             var standardSeasonPattern = new System.Text.RegularExpressions.Regex(
                 @"^(Season\s*\d+|S\d+|Season\s*\d{2,})$",
-                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-            
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase,
+                RegexMatchTimeout);
+
             // Pattern 2: Folders containing "Season" or "S" followed by a number (e.g., "Dororo - Season 1")
             var containsSeasonPattern = new System.Text.RegularExpressions.Regex(
                 @".*\b(Season|S)\s*\d+.*",
-                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase,
+                RegexMatchTimeout);
 
             var subdirectories = Directory.GetDirectories(seriesPath);
             var seasonFolders = new List<string>();
-            
+
             foreach (var dir in subdirectories)
             {
                 var dirName = Path.GetFileName(dir);
@@ -2984,7 +2987,7 @@ public class RenameCoordinator
                 // If this looks like Season 1 but has a different name, check if we should rename it
                 if (containsSeasonPattern.IsMatch(seasonFolderName) && 
                     !standardSeasonPattern.IsMatch(seasonFolderName) &&
-                    System.Text.RegularExpressions.Regex.IsMatch(seasonFolderName, @"\b(Season|S)\s*1\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                    System.Text.RegularExpressions.Regex.IsMatch(seasonFolderName, @"\b(Season|S)\s*1\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase, RegexMatchTimeout))
                 {
                     // This is a Season 1 folder with a non-standard name (e.g., "Dororo - Season 1")
                     // Check if there's a nested "Season 01" folder inside it
@@ -3076,12 +3079,14 @@ public class RenameCoordinator
             // Pattern 1: Standard season folders (Season 1, Season 01, S1, etc.)
             var standardSeasonPattern = new System.Text.RegularExpressions.Regex(
                 @"^(Season\s*\d+|S\d+|Season\s*\d{2,})$",
-                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-            
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase,
+                RegexMatchTimeout);
+
             // Pattern 2: Folders containing "Season" or "S" followed by a number (e.g., "Dororo - Season 1")
             var containsSeasonPattern = new System.Text.RegularExpressions.Regex(
                 @".*\b(Season|S)\s*\d+.*",
-                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase,
+                RegexMatchTimeout);
 
             var subdirectories = Directory.GetDirectories(seriesPath);
             var seasonFolders = new List<string>();
@@ -3879,8 +3884,9 @@ public class RenameCoordinator
                         // Check if the directory name matches season folder patterns
                         var seasonPattern = new System.Text.RegularExpressions.Regex(
                             @"^(Season\s*\d+|S\d+|Season\s*\d{2,})$",
-                            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-                        
+                            System.Text.RegularExpressions.RegexOptions.IgnoreCase,
+                            RegexMatchTimeout);
+
                         var isSeasonFolder = seasonPattern.IsMatch(episodeDirName);
                         
                         if (isSeasonFolder)
@@ -4569,7 +4575,7 @@ public class RenameCoordinator
                 
                 // Check if the original name looks like a filename pattern (contains S##E##)
                 var isFilenamePattern = !string.IsNullOrWhiteSpace(originalName) && 
-                                       System.Text.RegularExpressions.Regex.IsMatch(originalName, @"[Ss]\d+[Ee]\d+", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                                       System.Text.RegularExpressions.Regex.IsMatch(originalName, @"[Ss]\d+[Ee]\d+", System.Text.RegularExpressions.RegexOptions.IgnoreCase, RegexMatchTimeout);
                 
                 _logger.LogInformation("[MR] [DEBUG] Is filename pattern: {IsPattern}", isFilenamePattern);
                 
@@ -5112,7 +5118,8 @@ public class RenameCoordinator
         var seasonMatch = System.Text.RegularExpressions.Regex.Match(
             directoryName,
             @"(?:Season\s*|S)(\d+)",
-            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase,
+            RegexMatchTimeout);
         if (seasonMatch.Success && int.TryParse(seasonMatch.Groups[1].Value, out var seasonNum))
         {
             return seasonNum;
@@ -5145,7 +5152,8 @@ public class RenameCoordinator
             // Check if the directory name matches common season folder patterns
             var seasonPattern = new System.Text.RegularExpressions.Regex(
                 @"^(Season\s*\d+|S\d+|Season\s*\d{2,})$",
-                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase,
+                RegexMatchTimeout);
 
             if (seasonPattern.IsMatch(directoryName))
             {
@@ -5235,7 +5243,7 @@ public class RenameCoordinator
         {
             var folderName = Path.GetFileName(currentPath);
             // Try to extract year from folder name pattern: "Name (YYYY) [provider-id]"
-            var yearMatch = System.Text.RegularExpressions.Regex.Match(folderName, @"\((\d{4})\)");
+            var yearMatch = System.Text.RegularExpressions.Regex.Match(folderName, @"\((\d{4})\)", System.Text.RegularExpressions.RegexOptions.None, RegexMatchTimeout);
             if (yearMatch.Success && int.TryParse(yearMatch.Groups[1].Value, out var folderYear))
             {
                 // If folder year is significantly different (more than 5 years), it might be correct
