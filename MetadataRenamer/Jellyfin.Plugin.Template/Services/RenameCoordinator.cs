@@ -855,296 +855,279 @@ public class RenameCoordinator
         ApplySeriesRenameAndEpisodeProcessing(series, cfg, path, name, ref year, yearSource, newHash, oldHash, hasProviderIds, providerIdsChanged, isFirstTime, seriesRenameOnCooldown, seriesIsIdentified, proceedReason, now);
     }
 
+    private static Dictionary<string, string>? GetPreviousProviderIds(Series series, bool hasProviderIds, Dictionary<Guid, Dictionary<string, string>> previousProviderIdsByItem)
+    {
+        if (!hasProviderIds || series.ProviderIds == null)
+            return null;
+        previousProviderIdsByItem.TryGetValue(series.Id, out var previous);
+        return previous;
+    }
+
+    private (string? selectedProviderKey, string? selectedProviderId) DetectUserSelectedProvider(Series series, PluginConfiguration cfg, Dictionary<string, string>? previousProviderIds, bool providerIdsChanged, bool isFirstTime)
+    {
+        if (isFirstTime)
+        {
+            LogFirstTimeProviderDetection(cfg, series);
+            return (null, null);
+        }
+        if (!providerIdsChanged || previousProviderIds == null)
+            return (null, null);
+        return SelectProviderFromChangedProviders(series, cfg, previousProviderIds);
+    }
+
+    private void LogFirstTimeProviderDetection(PluginConfiguration cfg, Series series)
+    {
+        try
+        {
+            DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "PROVIDER-DETECT", location = "RenameCoordinator.cs:498", message = "First time processing - cannot detect user selection", data = new { currentProviderIds = series.ProviderIds?.Select(kv => $"{kv.Key}={kv.Value}").ToList() ?? new List<string>(), preferredProviders = cfg.PreferredSeriesProviders?.ToList() ?? new List<string>() }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
+        }
+        catch { /* ignore */ }
+        _logger.LogInformation("[MR] First time processing - cannot detect user selection, will use preferred provider");
+    }
+
+    private (string? selectedProviderKey, string? selectedProviderId) SelectProviderFromChangedProviders(Series series, PluginConfiguration cfg, Dictionary<string, string> previousProviderIds)
+    {
+        var changedProviders = CollectChangedProviders(series, previousProviderIds);
+        foreach (var cp in changedProviders)
+        {
+            if (cp.ChangeType == "NEW")
+                _logger.LogInformation("[MR] ✓ Detected NEW provider: {Provider}={Id}", cp.Key, cp.Value);
+            else
+                _logger.LogInformation("[MR] ✓ Detected CHANGED provider: {Provider}={OldId} -> {NewId}", cp.Key, previousProviderIds.TryGetValue(cp.Key, out var ov) ? ov : "(unknown)", cp.Value);
+        }
+        if (changedProviders.Count == 0)
+        {
+            LogNoChangedProviderDetected(cfg, series, previousProviderIds);
+            return (null, null);
+        }
+        var preferredList = cfg.PreferredSeriesProviders ?? new System.Collections.ObjectModel.Collection<string>();
+        LogChangedProvidersCollected(changedProviders, preferredList);
+        var match = TryMatchPreferredProvider(changedProviders, preferredList);
+        if (match != null)
+        {
+            LogProviderSelectedFromPreferred(match.Value.Key, match.Value.Value, match.Value.ChangeType);
+            return (match.Value.Key, match.Value.Value);
+        }
+        var first = changedProviders[0];
+        LogProviderSelectedFirstChanged(first.Key, first.Value, first.ChangeType);
+        return (first.Key, first.Value);
+    }
+
+    private static List<(string Key, string Value, string ChangeType)> CollectChangedProviders(Series series, Dictionary<string, string> previousProviderIds)
+    {
+        var changedProviders = new List<(string Key, string Value, string ChangeType)>();
+        if (series.ProviderIds == null)
+            return changedProviders;
+        foreach (var kv in series.ProviderIds)
+        {
+            if (!previousProviderIds.TryGetValue(kv.Key, out var oldValue))
+                changedProviders.Add((kv.Key, kv.Value ?? string.Empty, "NEW"));
+            else if (oldValue != kv.Value)
+                changedProviders.Add((kv.Key, kv.Value ?? string.Empty, "CHANGED"));
+        }
+        return changedProviders;
+    }
+
+    private void LogNoChangedProviderDetected(PluginConfiguration cfg, Series series, Dictionary<string, string> previousProviderIds)
+    {
+        try
+        {
+            DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "PROVIDER-DETECT", location = "RenameCoordinator.cs:492", message = "WARNING: No changed provider detected - all IDs already present", data = new { previousProviderIds = previousProviderIds.Select(kv => $"{kv.Key}={kv.Value}").ToList(), currentProviderIds = series.ProviderIds?.Select(kv => $"{kv.Key}={kv.Value}").ToList() ?? new List<string>(), preferredProviders = cfg.PreferredSeriesProviders?.ToList() ?? new List<string>() }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
+        }
+        catch { /* ignore */ }
+        _logger.LogWarning("[MR] ⚠️ No newly added/changed provider detected (all IDs were already present). This may indicate the wrong match was selected.");
+        _logger.LogWarning("[MR] ⚠️ If you selected a different match in Identify, you may need to clear the series metadata first, then re-identify.");
+    }
+
+    private void LogChangedProvidersCollected(List<(string Key, string Value, string ChangeType)> changedProviders, System.Collections.ObjectModel.Collection<string> preferredList)
+    {
+        try
+        {
+            DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "PROVIDER-DETECT", location = "RenameCoordinator.cs:448", message = "Changed providers collected", data = new { changedProvidersCount = changedProviders.Count, changedProviders = changedProviders.Select(cp => new { key = cp.Key, value = cp.Value, changeType = cp.ChangeType }).ToList(), preferredList = preferredList.ToList() }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
+        }
+        catch { /* ignore */ }
+    }
+
+    private static (string Key, string Value, string ChangeType)? TryMatchPreferredProvider(List<(string Key, string Value, string ChangeType)> changedProviders, System.Collections.ObjectModel.Collection<string> preferredList)
+    {
+        foreach (var preferred in preferredList)
+        {
+            var match = changedProviders.FirstOrDefault(cp => string.Equals(cp.Key, preferred, StringComparison.OrdinalIgnoreCase));
+            if (match.Key != null)
+                return match;
+        }
+        return null;
+    }
+
+    private void LogProviderSelectedFromPreferred(string key, string id, string changeType)
+    {
+        try
+        {
+            DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "PROVIDER-DETECT", location = "RenameCoordinator.cs:460", message = "Provider selected from preferred list", data = new { selectedProvider = key, selectedId = id, changeType = changeType }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
+        }
+        catch { /* ignore */ }
+        _logger.LogInformation("[MR] ✓ Selected provider from changed list (prioritized by preference): {Provider}={Id} ({ChangeType})", key, id, changeType);
+    }
+
+    private void LogProviderSelectedFirstChanged(string key, string id, string changeType)
+    {
+        try
+        {
+            DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "PROVIDER-DETECT", location = "RenameCoordinator.cs:470", message = "Provider selected (first changed, no preferred match)", data = new { selectedProvider = key, selectedId = id, changeType = changeType }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
+        }
+        catch { /* ignore */ }
+        _logger.LogInformation("[MR] ✓ Selected first changed provider: {Provider}={Id} ({ChangeType})", key, id, changeType);
+    }
+
+    private (string providerLabel, string providerId) ResolveProviderLabelAndId(Series series, PluginConfiguration cfg, string path, string name, ref int? year, bool hasProviderIds, bool providerIdsChanged, bool isFirstTime)
+    {
+        var previousProviderIds = GetPreviousProviderIds(series, hasProviderIds, _previousProviderIdsByItem);
+        if (series.ProviderIds == null || series.ProviderIds.Count == 0)
+            return (string.Empty, string.Empty);
+
+        if (providerIdsChanged && previousProviderIds != null)
+            LogProviderIdDetectionStart(series, previousProviderIds, cfg);
+        var (selectedKey, selectedId) = DetectUserSelectedProvider(series, cfg, previousProviderIds, providerIdsChanged, isFirstTime);
+
+        if (selectedKey != null && selectedId != null)
+        {
+            ApplyYearCorrectionAndLog(ref year, selectedKey, selectedId, name, path);
+            LogFinalProviderSelectionUserSelected(series, selectedKey, selectedId);
+            return (selectedKey.Trim().ToLowerInvariant(), selectedId.Trim());
+        }
+        return ResolveProviderFromPreferredList(series, cfg, path, name, ref year);
+    }
+
+    private void LogProviderIdDetectionStart(Series series, Dictionary<string, string>? previousProviderIds, PluginConfiguration cfg)
+    {
+        try
+        {
+            DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "PROVIDER-DETECT", location = "RenameCoordinator.cs:411", message = "Provider IDs changed - starting detection", data = new { seriesId = series.Id.ToString(), seriesName = series.Name ?? "NULL", previousProviderIds = previousProviderIds?.Select(kv => $"{kv.Key}={kv.Value}").ToList() ?? new List<string>(), currentProviderIds = series.ProviderIds?.Select(kv => $"{kv.Key}={kv.Value}").ToList() ?? new List<string>(), preferredProviders = cfg.PreferredSeriesProviders?.ToList() ?? new List<string>() }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
+        }
+        catch { /* ignore */ }
+        _logger.LogInformation("[MR] === Detecting User-Selected Provider (Identify) ===");
+        _logger.LogInformation("[MR] Previous Provider IDs: {Previous}", previousProviderIds != null && previousProviderIds.Count > 0 ? string.Join(", ", previousProviderIds.Select(kv => $"{kv.Key}={kv.Value}")) : "NONE");
+        _logger.LogInformation("[MR] Current Provider IDs: {Current}", series.ProviderIds != null ? string.Join(", ", series.ProviderIds.Select(kv => $"{kv.Key}={kv.Value}")) : "NONE");
+    }
+
+    private void ApplyYearCorrectionAndLog(ref int? year, string providerLabel, string providerId, string name, string path)
+    {
+        var yearBefore = year;
+        year = ValidateAndCorrectYear(year, providerLabel.Trim().ToLowerInvariant(), providerId, name, path);
+        if (yearBefore != year)
+        {
+            _logger.LogInformation("[MR] === Year Correction Applied ===");
+            _logger.LogInformation("[MR] Year BEFORE correction: {BeforeYear}", yearBefore?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+            _logger.LogInformation("[MR] Year AFTER correction: {AfterYear}", year?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
+        }
+    }
+
+    private void LogFinalProviderSelectionUserSelected(Series series, string providerLabel, string providerId)
+    {
+        try
+        {
+            DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "PROVIDER-DETECT", location = "RenameCoordinator.cs:504", message = "FINAL: Using user-selected provider", data = new { selectedProvider = providerLabel, selectedId = providerId, allProviderIds = series.ProviderIds?.Select(kv => $"{kv.Key}={kv.Value}").ToList() ?? new List<string>() }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
+        }
+        catch { /* ignore */ }
+        _logger.LogInformation("[MR] === Provider Selection (User-Selected) ===");
+        _logger.LogInformation("[MR] Using user-selected provider from Identify: {Provider}={Id}", providerLabel, providerId);
+    }
+
+    private (string providerLabel, string providerId) ResolveProviderFromPreferredList(Series series, PluginConfiguration cfg, string path, string name, ref int? year)
+    {
+        var preferredList = cfg.PreferredSeriesProviders ?? new System.Collections.ObjectModel.Collection<string>();
+        _logger.LogInformation("[MR] Preferred Providers: {Providers}", preferredList.Count > 0 ? string.Join(", ", preferredList) : "NONE");
+        var best = ProviderIdHelper.GetBestProvider(series.ProviderIds, preferredList);
+        if (best == null)
+        {
+            _logger.LogWarning("[MR] No matching provider found in preferred list");
+            return (string.Empty, string.Empty);
+        }
+        var providerLabel = best.Value.ProviderLabel;
+        var providerId = best.Value.Id;
+        ApplyYearCorrectionAndLog(ref year, providerLabel, providerId, name, path);
+        LogFinalProviderSelectionPreferred(series, providerLabel, providerId, preferredList);
+        if (series.ProviderIds != null && series.ProviderIds.Count > 1)
+        {
+            _logger.LogWarning("[MR] ⚠️ WARNING: Multiple provider IDs detected ({Count}). Selected: {SelectedProvider}={SelectedId}", series.ProviderIds.Count, providerLabel, providerId);
+            _logger.LogWarning("[MR] ⚠️ If the wrong ID was selected, check your 'Preferred Series Providers' setting in plugin configuration.");
+            _logger.LogWarning("[MR] ⚠️ Current preference order: {Order}", string.Join(" > ", preferredList));
+        }
+        return (providerLabel, providerId);
+    }
+
+    private void LogFinalProviderSelectionPreferred(Series series, string providerLabel, string providerId, System.Collections.ObjectModel.Collection<string> preferredList)
+    {
+        try
+        {
+            DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "PROVIDER-DETECT", location = "RenameCoordinator.cs:522", message = "FINAL: Using preferred list provider (fallback)", data = new { selectedProvider = providerLabel, selectedId = providerId, preferredList = preferredList.ToList(), allProviderIds = series.ProviderIds?.Select(kv => $"{kv.Key}={kv.Value}").ToList() ?? new List<string>(), whyFallback = "No user-selected provider detected" }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
+        }
+        catch { /* ignore */ }
+        _logger.LogInformation("[MR] === Provider Selection (Preferred List) ===");
+        _logger.LogInformation("[MR] Selected Provider: {Provider}={Id} (from preferred list: {PreferredList})", providerLabel, providerId, string.Join(", ", preferredList));
+    }
+
     private void ApplySeriesRenameAndEpisodeProcessing(Series series, PluginConfiguration cfg, string path, string name, ref int? year, string yearSource, string newHash, string? oldHash, bool hasProviderIds, bool providerIdsChanged, bool isFirstTime, bool seriesRenameOnCooldown, bool seriesIsIdentified, string proceedReason, DateTime now)
     {
-        // Handle provider IDs - use if available, otherwise use empty values
-        string providerLabel = string.Empty;
-        string providerId = string.Empty;
+        var (providerLabel, providerId) = ResolveProviderLabelAndId(series, cfg, path, name, ref year, hasProviderIds, providerIdsChanged, isFirstTime);
 
-        // SMART DETECTION: Before storing new provider IDs, check what changed
-            // This allows us to detect which provider the user selected in "Identify"
-            Dictionary<string, string>? previousProviderIds = null;
-            if (hasProviderIds && series.ProviderIds != null)
-            {
-                // Get previous provider IDs BEFORE storing new ones
-                _previousProviderIdsByItem.TryGetValue(series.Id, out previousProviderIds);
-            }
+        _logger.LogInformation("[MR] ✓ Proceeding with rename. Reason: {Reason}", proceedReason);
+        _logger.LogInformation("[MR] Old Hash: {OldHash}, New Hash: {NewHash}", oldHash ?? "(none)", newHash);
+        if (hasProviderIds && series.ProviderIds != null)
+        {
+            _providerHashByItem[series.Id] = newHash;
+            _previousProviderIdsByItem[series.Id] = new Dictionary<string, string>(series.ProviderIds);
+        }
 
-            if (series.ProviderIds != null && series.ProviderIds.Count > 0)
+        if (series.ProviderIds == null || series.ProviderIds.Count == 0)
+        {
+            if (cfg.RequireProviderIdMatch)
             {
-                // SMART DETECTION: If provider IDs changed, detect which one was newly added/changed
-                // This represents the provider the user selected in "Identify"
-                string? selectedProviderKey = null;
-                string? selectedProviderId = null;
-                
-                if (providerIdsChanged && previousProviderIds != null)
-                {
-                    // #region agent log - Provider ID Detection
-                    DebugLogHelper.SafeAppend( System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "PROVIDER-DETECT", location = "RenameCoordinator.cs:411", message = "Provider IDs changed - starting detection", data = new { seriesId = series.Id.ToString(), seriesName = series.Name ?? "NULL", previousProviderIds = previousProviderIds.Select(kv => $"{kv.Key}={kv.Value}").ToList(), currentProviderIds = series.ProviderIds?.Select(kv => $"{kv.Key}={kv.Value}").ToList() ?? new List<string>(), preferredProviders = cfg.PreferredSeriesProviders?.ToList() ?? new List<string>() }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
-                    // #endregion
-                    
-                    // Compare old vs new to find what changed
-                    _logger.LogInformation("[MR] === Detecting User-Selected Provider (Identify) ===");
-                    _logger.LogInformation("[MR] Previous Provider IDs: {Previous}", 
-                        previousProviderIds.Count > 0 
-                            ? string.Join(", ", previousProviderIds.Select(kv => $"{kv.Key}={kv.Value}"))
-                            : "NONE");
-                    _logger.LogInformation("[MR] Current Provider IDs: {Current}", 
-                        string.Join(", ", series.ProviderIds.Select(kv => $"{kv.Key}={kv.Value}")));
-                    
-                    // Collect all new/changed providers (don't break on first match)
-                    var changedProviders = new List<(string Key, string Value, string ChangeType)>();
-                    
-                    foreach (var kv in series.ProviderIds)
-                    {
-                        var providerKey = kv.Key;
-                        var providerValue = kv.Value;
-                        
-                        // Check if this provider ID is new or changed
-                        if (!previousProviderIds.TryGetValue(providerKey, out var oldValue))
-                        {
-                            // New provider ID
-                            changedProviders.Add((providerKey, providerValue, "NEW"));
-                            _logger.LogInformation("[MR] ✓ Detected NEW provider: {Provider}={Id}", 
-                                providerKey, providerValue);
-                        }
-                        else if (oldValue != providerValue)
-                        {
-                            // Changed provider ID
-                            changedProviders.Add((providerKey, providerValue, "CHANGED"));
-                            _logger.LogInformation("[MR] ✓ Detected CHANGED provider: {Provider}={OldId} -> {NewId}", 
-                                providerKey, oldValue, providerValue);
-                        }
-                    }
-                    
-                    // If multiple providers changed, prioritize based on preferred list
-                    if (changedProviders.Count > 0)
-                    {
-                        var preferredList = cfg.PreferredSeriesProviders != null
-                            ? cfg.PreferredSeriesProviders
-                            : new System.Collections.ObjectModel.Collection<string>();
-                        
-                        // #region agent log - Changed Providers List
-                        DebugLogHelper.SafeAppend( System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "PROVIDER-DETECT", location = "RenameCoordinator.cs:448", message = "Changed providers collected", data = new { changedProvidersCount = changedProviders.Count, changedProviders = changedProviders.Select(cp => new { key = cp.Key, value = cp.Value, changeType = cp.ChangeType }).ToList(), preferredList = preferredList.ToList() }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
-                        // #endregion
-                        
-                        // Try to find a changed provider that matches the preferred list
-                        foreach (var preferred in preferredList)
-                        {
-                            var match = changedProviders.FirstOrDefault(cp => 
-                                string.Equals(cp.Key, preferred, StringComparison.OrdinalIgnoreCase));
-                            if (match.Key != null)
-                            {
-                                selectedProviderKey = match.Key;
-                                selectedProviderId = match.Value;
-                                // #region agent log - Provider Selected from Preferred
-                                DebugLogHelper.SafeAppend( System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "PROVIDER-DETECT", location = "RenameCoordinator.cs:460", message = "Provider selected from preferred list", data = new { selectedProvider = selectedProviderKey, selectedId = selectedProviderId, changeType = match.ChangeType, preferred = preferred }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
-                                // #endregion
-                                _logger.LogInformation("[MR] ✓ Selected provider from changed list (prioritized by preference): {Provider}={Id} ({ChangeType})", 
-                                    selectedProviderKey, selectedProviderId, match.ChangeType);
-                                break;
-                            }
-                        }
-                        
-                        // If no preferred match found, use the first changed provider
-                        if (selectedProviderKey == null)
-                        {
-                            selectedProviderKey = changedProviders[0].Key;
-                            selectedProviderId = changedProviders[0].Value;
-                            // #region agent log - Provider Selected (First Changed)
-                            DebugLogHelper.SafeAppend( System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "PROVIDER-DETECT", location = "RenameCoordinator.cs:470", message = "Provider selected (first changed, no preferred match)", data = new { selectedProvider = selectedProviderKey, selectedId = selectedProviderId, changeType = changedProviders[0].ChangeType }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
-                            // #endregion
-                            _logger.LogInformation("[MR] ✓ Selected first changed provider: {Provider}={Id} ({ChangeType})", 
-                                selectedProviderKey, selectedProviderId, changedProviders[0].ChangeType);
-                        }
-                    }
-                    else
-                    {
-                        // #region agent log - No Changed Provider Detected
-                        DebugLogHelper.SafeAppend( System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "PROVIDER-DETECT", location = "RenameCoordinator.cs:492", message = "WARNING: No changed provider detected - all IDs already present", data = new { previousProviderIds = previousProviderIds.Select(kv => $"{kv.Key}={kv.Value}").ToList(), currentProviderIds = series.ProviderIds?.Select(kv => $"{kv.Key}={kv.Value}").ToList() ?? new List<string>(), preferredProviders = cfg.PreferredSeriesProviders?.ToList() ?? new List<string>() }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
-                        // #endregion
-                        _logger.LogWarning("[MR] ⚠️ No newly added/changed provider detected (all IDs were already present). This may indicate the wrong match was selected.");
-                        _logger.LogWarning("[MR] ⚠️ If you selected a different match in Identify, you may need to clear the series metadata first, then re-identify.");
-                    }
-                }
-                else if (isFirstTime)
-                {
-                    // #region agent log - First Time Processing
-                    DebugLogHelper.SafeAppend( System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "PROVIDER-DETECT", location = "RenameCoordinator.cs:498", message = "First time processing - cannot detect user selection", data = new { currentProviderIds = series.ProviderIds?.Select(kv => $"{kv.Key}={kv.Value}").ToList() ?? new List<string>(), preferredProviders = cfg.PreferredSeriesProviders?.ToList() ?? new List<string>() }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
-                    // #endregion
-                    _logger.LogInformation("[MR] First time processing - cannot detect user selection, will use preferred provider");
-                }
-                
-                // If we detected a user-selected provider, use it; otherwise fall back to preferred list
-                if (selectedProviderKey != null && selectedProviderId != null)
-                {
-                    providerLabel = selectedProviderKey.Trim().ToLowerInvariant();
-                    providerId = selectedProviderId.Trim();
-                    
-                    // Log year before correction
-                    var yearBeforeCorrection = year;
-                    
-                    // Validate and correct year now that we have the provider ID
-                    year = ValidateAndCorrectYear(year, providerLabel, providerId, name, path);
-                    
-                    // Log year after correction
-                    if (yearBeforeCorrection != year)
-                    {
-                        _logger.LogInformation("[MR] === Year Correction Applied ===");
-                        _logger.LogInformation("[MR] Year BEFORE correction: {BeforeYear}", 
-                            yearBeforeCorrection?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
-                        _logger.LogInformation("[MR] Year AFTER correction: {AfterYear}", 
-                            year?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
-                    }
-                    
-                    // #region agent log - Final Provider Selection (User-Selected)
-                    DebugLogHelper.SafeAppend( System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "PROVIDER-DETECT", location = "RenameCoordinator.cs:504", message = "FINAL: Using user-selected provider", data = new { selectedProvider = providerLabel, selectedId = providerId, allProviderIds = series.ProviderIds?.Select(kv => $"{kv.Key}={kv.Value}").ToList() ?? new List<string>() }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
-                    // #endregion
-                    _logger.LogInformation("[MR] === Provider Selection (User-Selected) ===");
-                    _logger.LogInformation("[MR] Using user-selected provider from Identify: {Provider}={Id}", providerLabel, providerId);
-                }
-                else
-                {
-                    // Fall back to preferred provider list
-                    var preferredProviders = cfg.PreferredSeriesProviders != null
-                        ? string.Join(", ", cfg.PreferredSeriesProviders)
-                        : "NONE";
-                    _logger.LogInformation("[MR] Preferred Providers: {Providers}", preferredProviders);
+                _logger.LogWarning("[MR] SKIP: RequireProviderIdMatch is true but no ProviderIds found. Name={Name}", name);
+                _logger.LogInformation("[MR] ===== Processing Complete (Skipped) =====");
+                return;
+            }
+            _logger.LogInformation("[MR] No ProviderIds but RequireProviderIdMatch is false - renaming to help identification");
+        }
 
-                    var preferredList = cfg.PreferredSeriesProviders != null
-                        ? cfg.PreferredSeriesProviders
-                        : new System.Collections.ObjectModel.Collection<string>();
-                    var best = ProviderIdHelper.GetBestProvider(series.ProviderIds, preferredList);
-                    if (best != null)
-                    {
-                        providerLabel = best.Value.ProviderLabel;
-                        providerId = best.Value.Id;
-                        
-                        // Log year before correction
-                        var yearBeforeCorrection = year;
-                        
-                        // Validate and correct year now that we have the provider ID
-                        year = ValidateAndCorrectYear(year, providerLabel, providerId, name, path);
-                        
-                        // Log year after correction
-                        if (yearBeforeCorrection != year)
-                        {
-                            _logger.LogInformation("[MR] === Year Correction Applied ===");
-                            _logger.LogInformation("[MR] Year BEFORE correction: {BeforeYear}", 
-                                yearBeforeCorrection?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
-                            _logger.LogInformation("[MR] Year AFTER correction: {AfterYear}", 
-                                year?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL");
-                        }
-                        
-                        // #region agent log - Final Provider Selection (Preferred List)
-                        DebugLogHelper.SafeAppend( System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "PROVIDER-DETECT", location = "RenameCoordinator.cs:522", message = "FINAL: Using preferred list provider (fallback)", data = new { selectedProvider = providerLabel, selectedId = providerId, preferredList = preferredList.ToList(), allProviderIds = series.ProviderIds?.Select(kv => $"{kv.Key}={kv.Value}").ToList() ?? new List<string>(), whyFallback = selectedProviderKey == null ? "No user-selected provider detected" : "User-selected provider was null" }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
-                        // #endregion
-                        _logger.LogInformation("[MR] === Provider Selection (Preferred List) ===");
-                        _logger.LogInformation("[MR] Selected Provider: {Provider}={Id} (from preferred list: {PreferredList})", 
-                            providerLabel, providerId, string.Join(", ", preferredList));
-                        
-                        // Warn if multiple provider IDs exist - might indicate conflicting matches
-                        if (series.ProviderIds.Count > 1)
-                        {
-                            _logger.LogWarning("[MR] ⚠️ WARNING: Multiple provider IDs detected ({Count}). Selected: {SelectedProvider}={SelectedId}", 
-                                series.ProviderIds.Count, providerLabel, providerId);
-                            _logger.LogWarning("[MR] ⚠️ If the wrong ID was selected, check your 'Preferred Series Providers' setting in plugin configuration.");
-                            _logger.LogWarning("[MR] ⚠️ Current preference order: {Order}", string.Join(" > ", preferredList));
-                        }
-                    }
-                    else
-                    {
-                        _logger.LogWarning("[MR] No matching provider found in preferred list");
-                    }
-                }
-            }
-            
-            // Update hash AFTER processing (so we can compare next time)
-            _logger.LogInformation("[MR] ✓ Proceeding with rename. Reason: {Reason}", proceedReason);
-            _logger.LogInformation("[MR] Old Hash: {OldHash}, New Hash: {NewHash}", oldHash ?? "(none)", newHash);
-            if (hasProviderIds && series.ProviderIds != null)
-            {
-                _providerHashByItem[series.Id] = newHash;
-                // Store current provider IDs for next comparison
-                _previousProviderIdsByItem[series.Id] = new Dictionary<string, string>(series.ProviderIds);
-            }
-            
-            if (series.ProviderIds == null || series.ProviderIds.Count == 0)
-            {
-                if (cfg.RequireProviderIdMatch)
-                {
-                    // If we require provider IDs but don't have any, skip renaming
-                    _logger.LogWarning("[MR] SKIP: RequireProviderIdMatch is true but no ProviderIds found. Name={Name}", name);
-                    _logger.LogInformation("[MR] ===== Processing Complete (Skipped) =====");
-                    return;
-                }
-                else
-                {
-                    // No provider IDs but we don't require them - rename anyway to help with identification
-                    _logger.LogInformation("[MR] No ProviderIds but RequireProviderIdMatch is false - renaming to help identification");
-                }
-            }
+        var renameSuccessful = TryRenameSeriesFolderIfNotOnCooldown(series, cfg, path, name, ref year, yearSource, providerLabel, providerId, seriesRenameOnCooldown);
+        MaybeProcessEpisodesForSeries(series, cfg, now, renameSuccessful, providerIdsChanged, seriesIsIdentified, seriesRenameOnCooldown);
 
-            // Only attempt series folder rename if not on cooldown
-            bool renameSuccessful = false;
-            if (!seriesRenameOnCooldown)
-            {
-            // Build final desired folder name: Name (Year) [provider-id] or Name (Year) if no provider IDs
-            var currentFolderName = Path.GetFileName(path);
-            
-            // #region agent log - Before folder name generation
-            DebugLogHelper.SafeAppend( System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "YEAR-DETECT", location = "RenameCoordinator.cs:594", message = "Before folder name generation", data = new { seriesName = name, year = year?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", yearSource = yearSource, providerLabel = providerLabel ?? "NULL", providerId = providerId ?? "NULL", currentFolderName = currentFolderName, format = cfg.SeriesFolderFormat, productionYear = series.ProductionYear?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", premiereDate = series.PremiereDate?.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture) ?? "NULL" }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
-            // #endregion
-            
-            _logger.LogInformation("[MR] === Folder Name Generation ===");
-            _logger.LogInformation("[MR] Format: {Format}", cfg.SeriesFolderFormat);
-            _logger.LogInformation("[MR] FINAL Year (AFTER correction): {Year} (Original Source: {YearSource})", 
-                year?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
-                yearSource);
-            _logger.LogInformation("[MR] Values: Name={Name}, Year={Year}, Provider={Provider}, ID={Id}", 
-                name ?? "NULL",
-                year?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL",
-                providerLabel ?? "NULL",
-                providerId ?? "NULL");
-            
-            var desiredFolderName = SafeName.RenderSeriesFolder(
-                cfg.SeriesFolderFormat,
-                name,
-                year,
-                providerLabel,
-                providerId);
-            
-            // #region agent log - Final Folder Name Generation
-            DebugLogHelper.SafeAppend( System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "PROVIDER-DETECT", location = "RenameCoordinator.cs:604", message = "Final folder name generation", data = new { seriesName = name, year = year?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", providerLabel = providerLabel ?? "NULL", providerId = providerId ?? "NULL", currentFolderName = currentFolderName, desiredFolderName = desiredFolderName, format = cfg.SeriesFolderFormat }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
-            // #endregion
-            
-            _logger.LogInformation("[MR] Current Folder Name: {Current}", currentFolderName);
-            _logger.LogInformation("[MR] Desired Folder Name: {Desired}", desiredFolderName);
-            _logger.LogInformation("[MR] Year Available: {HasYear}", year.HasValue);
+        _logger.LogInformation("[MR] ===== Processing Complete =====");
+    }
 
-            _logger.LogInformation("[MR] Full Current Path: {Path}", path);
-            _logger.LogInformation("[MR] Dry Run Mode: {DryRun}", cfg.DryRun);
+    private bool TryRenameSeriesFolderIfNotOnCooldown(Series series, PluginConfiguration cfg, string path, string name, ref int? year, string yearSource, string providerLabel, string providerId, bool seriesRenameOnCooldown)
+    {
+        if (seriesRenameOnCooldown)
+        {
+            _logger.LogInformation("[MR] [DEBUG] Series folder rename skipped due to cooldown, but will still process episodes if needed");
+            return false;
+        }
+        var currentFolderName = Path.GetFileName(path);
+        DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "YEAR-DETECT", location = "RenameCoordinator.cs", message = "Before folder name generation", data = new { seriesName = name, year = year?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", yearSource = yearSource, providerLabel = providerLabel ?? "NULL", providerId = providerId ?? "NULL", currentFolderName = currentFolderName, format = cfg.SeriesFolderFormat, productionYear = series.ProductionYear?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", premiereDate = series.PremiereDate?.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture) ?? "NULL" }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
+        _logger.LogInformation("[MR] === Folder Name Generation ===");
+        _logger.LogInformation("[MR] Format: {Format}", cfg.SeriesFolderFormat);
+        _logger.LogInformation("[MR] FINAL Year (AFTER correction): {Year} (Original Source: {YearSource})", year?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", yearSource);
+        _logger.LogInformation("[MR] Values: Name={Name}, Year={Year}, Provider={Provider}, ID={Id}", name ?? "NULL", year?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", providerLabel ?? "NULL", providerId ?? "NULL");
+        var desiredFolderName = SafeName.RenderSeriesFolder(cfg.SeriesFolderFormat, name, year, providerLabel, providerId);
+        DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "PROVIDER-DETECT", location = "RenameCoordinator.cs", message = "Final folder name generation", data = new { seriesName = name, year = year?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL", providerLabel = providerLabel ?? "NULL", providerId = providerId ?? "NULL", currentFolderName = currentFolderName, desiredFolderName = desiredFolderName, format = cfg.SeriesFolderFormat }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
+        _logger.LogInformation("[MR] Current Folder Name: {Current}", currentFolderName);
+        _logger.LogInformation("[MR] Desired Folder Name: {Desired}", desiredFolderName);
+        _logger.LogInformation("[MR] Year Available: {HasYear}", year.HasValue);
+        _logger.LogInformation("[MR] Full Current Path: {Path}", path);
+        _logger.LogInformation("[MR] Dry Run Mode: {DryRun}", cfg.DryRun);
+        if (!SafeName.IsValidFolderOrFileName(desiredFolderName))
+        {
+            _logger.LogWarning("[MR] [SAFEGUARD] Series folder rename skipped: desired folder name is invalid. Series: {Name}, Id: {Id}", series.Name ?? "NULL", series.Id);
+            return false;
+        }
+        DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "D", location = "RenameCoordinator.cs", message = "Attempting rename", data = new { seriesName = name, currentPath = path, desiredFolderName = desiredFolderName, dryRun = cfg.DryRun }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
+        return _pathRenamer.TryRenameSeriesFolder(series, desiredFolderName, cfg.DryRun);
+    }
 
-            // Safeguard: ensure desired series folder name is valid before calling rename service
-            if (!SafeName.IsValidFolderOrFileName(desiredFolderName))
-            {
-                _logger.LogWarning("[MR] [SAFEGUARD] Series folder rename skipped: desired folder name is invalid. Series: {Name}, Id: {Id}", series.Name ?? "NULL", series.Id);
-            }
-            else
-            {
-                // #region agent log
-                DebugLogHelper.SafeAppend( System.Text.Json.JsonSerializer.Serialize(new { sessionId = "debug-session", runId = "run1", hypothesisId = "D", location = "RenameCoordinator.cs:186", message = "Attempting rename", data = new { seriesName = name, currentPath = path, desiredFolderName = desiredFolderName, dryRun = cfg.DryRun }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
-                // #endregion
-
-                renameSuccessful = _pathRenamer.TryRenameSeriesFolder(series, desiredFolderName, cfg.DryRun);
-            }
-            }
-            else
-            {
-                _logger.LogInformation("[MR] [DEBUG] Series folder rename skipped due to cooldown, but will still process episodes if needed");
-            }
-
-            // DEBUG: Log detailed decision-making for episode processing
+    private void MaybeProcessEpisodesForSeries(Series series, PluginConfiguration cfg, DateTime now, bool renameSuccessful, bool providerIdsChanged, bool seriesIsIdentified, bool seriesRenameOnCooldown)
+    {
+        // DEBUG: Log detailed decision-making for episode processing
             _logger.LogInformation("[MR] === Episode Processing Decision ===");
             _logger.LogInformation("[MR] renameSuccessful: {RenameSuccessful}", renameSuccessful);
             _logger.LogInformation("[MR] cfg.RenameEpisodeFiles: {RenameEpisodeFiles}", cfg.RenameEpisodeFiles);
