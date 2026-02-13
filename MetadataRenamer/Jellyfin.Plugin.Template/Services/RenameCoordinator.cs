@@ -1332,6 +1332,8 @@ public class RenameCoordinator
     {
         allEpisodes = new List<Episode>();
         allSeasons = new List<Season>();
+        if (_libraryManager == null)
+            return false;
         try
         {
             var query = new InternalItemsQuery { ParentId = series.Id, Recursive = true };
