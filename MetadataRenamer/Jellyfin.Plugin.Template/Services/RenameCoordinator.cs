@@ -1281,7 +1281,7 @@ public class RenameCoordinator
                 DebugLogHelper.SafeAppend(System.Text.Json.JsonSerializer.Serialize(new { runId = "run1", hypothesisId = "EPISODE-QUERY-EXECUTION", location = "RenameCoordinator.cs", message = "Executing episode query", data = new { seriesId = series.Id.ToString(), seriesName = series.Name ?? "NULL", seriesPath = series.Path ?? "NULL", queryParentId = series.Id.ToString(), queryRecursive = true, libraryManagerAvailable = _libraryManager != null }, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }) + "\n");
             }
             catch (Exception logEx) { _logger.LogError(logEx, "[MR] [DEBUG] [EPISODE-QUERY-EXECUTION] ERROR logging: {Error}", logEx.Message); }
-            var allItems = _libraryManager.GetItemList(query);
+            var allItems = _libraryManager.QueryItems(query).Items;
             allEpisodes = allItems.OfType<Episode>().ToList();
             allSeasons = allItems.OfType<Season>().ToList();
             return true;
@@ -1299,7 +1299,7 @@ public class RenameCoordinator
             {
                 _logger.LogInformation("[MR] [DEBUG] Attempting fallback method to retrieve episodes");
                 var query = new InternalItemsQuery { ParentId = series.Id, Recursive = true };
-                var allItems = _libraryManager.GetItemList(query);
+                var allItems = _libraryManager.QueryItems(query).Items;
                 allEpisodes = allItems.OfType<Episode>().ToList();
                 allSeasons = allItems.OfType<Season>().ToList();
                 _logger.LogInformation("[MR] Retrieved {Count} episodes using fallback recursive method", allEpisodes.Count);
@@ -2368,7 +2368,7 @@ public class RenameCoordinator
                 Recursive = true
             };
 
-            var allSeries = _libraryManager.GetItemList(query).OfType<Series>().ToList();
+            var allSeries = _libraryManager.QueryItems(query).Items.OfType<Series>().ToList();
 
             _logger.LogInformation("[MR] Found {Count} series in library", allSeries.Count);
 
@@ -3896,12 +3896,12 @@ public class RenameCoordinator
                     try
                     {
                         // Get all seasons for the series
-                        var seasons = _libraryManager.GetItemList(new MediaBrowser.Controller.Entities.InternalItemsQuery
+                        var seasons = _libraryManager.QueryItems(new MediaBrowser.Controller.Entities.InternalItemsQuery
                         {
                             ParentId = episode.Series.Id,
                             IncludeItemTypes = new[] { Jellyfin.Data.Enums.BaseItemKind.Season },
                             Recursive = false
-                        }).Cast<MediaBrowser.Controller.Entities.TV.Season>().ToList();
+                        }).Items.Cast<MediaBrowser.Controller.Entities.TV.Season>().ToList();
                         
                         // Find Season 1
                         var season1 = seasons.FirstOrDefault(s => s.IndexNumber == 1);
@@ -4194,12 +4194,12 @@ public class RenameCoordinator
                     try
                     {
                         // Get all seasons for the series
-                        var seasons = _libraryManager.GetItemList(new MediaBrowser.Controller.Entities.InternalItemsQuery
+                        var seasons = _libraryManager.QueryItems(new MediaBrowser.Controller.Entities.InternalItemsQuery
                         {
                             ParentId = episode.Series.Id,
                             IncludeItemTypes = new[] { Jellyfin.Data.Enums.BaseItemKind.Season },
                             Recursive = false
-                        }).Cast<MediaBrowser.Controller.Entities.TV.Season>().ToList();
+                        }).Items.Cast<MediaBrowser.Controller.Entities.TV.Season>().ToList();
                         
                         // Find the season matching the episode's season number
                         var matchingSeason = seasons.FirstOrDefault(s => s.IndexNumber == seasonNumber.Value);
@@ -4762,12 +4762,12 @@ public class RenameCoordinator
             return null;
         try
         {
-            var seasons = _libraryManager.GetItemList(new MediaBrowser.Controller.Entities.InternalItemsQuery
+            var seasons = _libraryManager.QueryItems(new MediaBrowser.Controller.Entities.InternalItemsQuery
             {
                 ParentId = series.Id,
                 IncludeItemTypes = new[] { Jellyfin.Data.Enums.BaseItemKind.Season },
                 Recursive = false
-            }).Cast<MediaBrowser.Controller.Entities.TV.Season>()
+            }).Items.Cast<MediaBrowser.Controller.Entities.TV.Season>()
               .OrderBy(s => s.IndexNumber ?? int.MaxValue)
               .ToList();
             var result = new System.Collections.Generic.List<(int, int)>();
@@ -4777,12 +4777,12 @@ public class RenameCoordinator
                 var seasonIndex = season.IndexNumber ?? 0;
                 if (seasonIndex < 1)
                     continue;
-                var count = _libraryManager.GetItemList(new MediaBrowser.Controller.Entities.InternalItemsQuery
+                var count = _libraryManager.QueryItems(new MediaBrowser.Controller.Entities.InternalItemsQuery
                 {
                     ParentId = season.Id,
                     IncludeItemTypes = new[] { Jellyfin.Data.Enums.BaseItemKind.Episode },
                     Recursive = false
-                }).Count;
+                }).Items.Count;
                 if (count > maxReasonablePerSeason)
                     useHeuristic = true;
                 result.Add((seasonIndex, count));
@@ -4914,23 +4914,23 @@ public class RenameCoordinator
             return null;
         try
         {
-            var seasons = _libraryManager.GetItemList(new MediaBrowser.Controller.Entities.InternalItemsQuery
+            var seasons = _libraryManager.QueryItems(new MediaBrowser.Controller.Entities.InternalItemsQuery
             {
                 ParentId = series.Id,
                 IncludeItemTypes = new[] { Jellyfin.Data.Enums.BaseItemKind.Season },
                 Recursive = false
-            }).Cast<MediaBrowser.Controller.Entities.TV.Season>()
+            }).Items.Cast<MediaBrowser.Controller.Entities.TV.Season>()
               .OrderBy(s => s.IndexNumber ?? int.MaxValue)
               .ToList();
             var season = seasons.FirstOrDefault(s => (s.IndexNumber ?? 0) == seasonNumber);
             if (season == null)
                 return null;
-            var count = _libraryManager.GetItemList(new MediaBrowser.Controller.Entities.InternalItemsQuery
+            var count = _libraryManager.QueryItems(new MediaBrowser.Controller.Entities.InternalItemsQuery
             {
                 ParentId = season.Id,
                 IncludeItemTypes = new[] { Jellyfin.Data.Enums.BaseItemKind.Episode },
                 Recursive = false
-            }).Count;
+            }).Items.Count;
             return count;
         }
         catch (Exception ex)
@@ -4953,12 +4953,12 @@ public class RenameCoordinator
             return null;
         try
         {
-            var seasons = _libraryManager.GetItemList(new MediaBrowser.Controller.Entities.InternalItemsQuery
+            var seasons = _libraryManager.QueryItems(new MediaBrowser.Controller.Entities.InternalItemsQuery
             {
                 ParentId = series.Id,
                 IncludeItemTypes = new[] { Jellyfin.Data.Enums.BaseItemKind.Season },
                 Recursive = false
-            }).Cast<MediaBrowser.Controller.Entities.TV.Season>()
+            }).Items.Cast<MediaBrowser.Controller.Entities.TV.Season>()
               .OrderBy(s => s.IndexNumber ?? int.MaxValue)
               .ToList();
             if (seasons.Count == 0)
@@ -4969,12 +4969,12 @@ public class RenameCoordinator
                 var seasonIndex = season.IndexNumber ?? 0;
                 if (seasonIndex < 1)
                     continue;
-                var episodeCount = _libraryManager.GetItemList(new MediaBrowser.Controller.Entities.InternalItemsQuery
+                var episodeCount = _libraryManager.QueryItems(new MediaBrowser.Controller.Entities.InternalItemsQuery
                 {
                     ParentId = season.Id,
                     IncludeItemTypes = new[] { Jellyfin.Data.Enums.BaseItemKind.Episode },
                     Recursive = false
-                }).Count;
+                }).Items.Count;
                 cumulativeEnd += episodeCount;
                 if (absoluteEpisodeNumber <= cumulativeEnd)
                 {
@@ -5002,12 +5002,12 @@ public class RenameCoordinator
             return (null, null);
         try
         {
-            var seasons = _libraryManager.GetItemList(new MediaBrowser.Controller.Entities.InternalItemsQuery
+            var seasons = _libraryManager.QueryItems(new MediaBrowser.Controller.Entities.InternalItemsQuery
             {
                 ParentId = series.Id,
                 IncludeItemTypes = new[] { Jellyfin.Data.Enums.BaseItemKind.Season },
                 Recursive = false
-            }).Cast<MediaBrowser.Controller.Entities.TV.Season>()
+            }).Items.Cast<MediaBrowser.Controller.Entities.TV.Season>()
               .OrderBy(s => s.IndexNumber ?? int.MaxValue)
               .ToList();
             if (seasons.Count == 0)
@@ -5018,12 +5018,12 @@ public class RenameCoordinator
                 var seasonIndex = season.IndexNumber ?? 0;
                 if (seasonIndex < 1)
                     continue;
-                var episodeCount = _libraryManager.GetItemList(new MediaBrowser.Controller.Entities.InternalItemsQuery
+                var episodeCount = _libraryManager.QueryItems(new MediaBrowser.Controller.Entities.InternalItemsQuery
                 {
                     ParentId = season.Id,
                     IncludeItemTypes = new[] { Jellyfin.Data.Enums.BaseItemKind.Episode },
                     Recursive = false
-                }).Count;
+                }).Items.Count;
                 var cumulativeStart = cumulativeEnd;
                 cumulativeEnd += episodeCount;
                 if (absoluteEpisodeNumber <= cumulativeEnd)
